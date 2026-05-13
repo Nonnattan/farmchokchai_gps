@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>GPS Tracker Starter v4</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="hero card">
+        <div class="hero-badge">GPS Tracker</div>
+        <h1>ติดตามตำแหน่งรถแบบเรียลไทม์</h1>
+        <p class="subtitle">
+          บันทึก vehicle_id, lat, lng, speed, accuracy และ timestampiso ลง
+          Firebase
+        </p>
+      </header>
+
+      <section class="card">
+        <div class="grid">
+          <div class="stat">
+            <span>Latitude</span><strong>{{ latText }}</strong>
+          </div>
+          <div class="stat">
+            <span>Longitude</span><strong>{{ lngText }}</strong>
+          </div>
+          <div class="stat">
+            <span>Speed</span><strong>{{ speedText }}</strong>
+          </div>
+          <div class="stat">
+            <span>Accuracy</span><strong>{{ accuracyText }}</strong>
+          </div>
+          <div class="stat stat-wide">
+            <span>Timestamp ISO</span><strong>{{ timestampText }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="field">
+          <label>ทะเบียนรถ / Vehicle ID</label>
+          <input v-model.trim="vehicleId" placeholder="เช่น กข-1234" />
+          <small>ระบบจะเปลี่ยนชื่อให้ปลอดภัยสำหรับ Firebase อัตโนมัติ</small>
+        </div>
+
+        <div class="field">
+          <label>ขั้นต่ำความแม่นยำที่แสดงเตือน (meters)</label>
+          <input
+            v-model="minAccuracyMetersInput"
+            inputmode="numeric"
+            placeholder="เช่น 50"
+          />
+          <small>ค่านี้บล็อกการบันทึกแล้ว</small>
+        </div>
+
+        <div class="field">
+          <label>ความถี่การอัปโหลด (ms)</label>
+          <input
+            v-model="uploadIntervalMsInput"
+            inputmode="numeric"
+            placeholder="เช่น 10000"
+          />
+          <small
+            >0 = ส่งทุกครั้ง, 1000 = ทุก 1 วินาที, 10000 = ทุก 10 วินาที</small
+          >
+        </div>
+
+        <div class="actions">
+          <button
+            class="btn primary"
+            @click="startTracking"
+            :disabled="tracking"
+          >
+            เริ่มติดตาม
+          </button>
+          <button class="btn" @click="stopTracking" :disabled="!tracking">
+            หยุดติดตาม
+          </button>
+          <button class="btn secondary" @click="testWrite">
+            ทดสอบเขียน DB
+          </button>
+        </div>
+
+        <p class="status" :class="statusType">{{ status }}</p>
+        <p class="hint">
+          ใช้งานได้บน HTTPS หรือ localhost เท่านั้น
+          และต้องกดยินยอมอนุญาตตำแหน่งก่อน
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>ข้อมูลล่าสุดที่จะเขียน</h2>
+          <button class="btn danger ghost" @click="clearLogs">
+            เคลียร์ log
+          </button>
+        </div>
+        <pre>{{ lastPayloadText }}</pre>
+      </section>
+
+      <section class="card">
+        <h2>Debug Log</h2>
+        <pre>{{ debugLog }}</pre>
+      </section>
+    </div>
+
+    <script src="firebase-config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
