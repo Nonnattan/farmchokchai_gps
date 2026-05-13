@@ -27,6 +27,10 @@ function formatNum(n, digits = 6) {
   return typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "-";
 }
 
+function formatInt(n) {
+  return typeof n === "number" && Number.isFinite(n) ? String(Math.round(n)) : "-";
+}
+
 function parsePositiveNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -77,7 +81,7 @@ createApp({
       return formatNum(this.lng, 6);
     },
     speedText() {
-      return typeof this.speed === "number" ? `${this.speed.toFixed(2)} m/s` : "-";
+      return typeof this.speed === "number" ? `${Math.round(this.speed)} m/s` : "-";
     },
     accuracyText() {
       return typeof this.accuracy === "number"
@@ -220,7 +224,7 @@ createApp({
         const accuracy =
           typeof coords.accuracy === "number" ? coords.accuracy : null;
         const speedValue =
-          typeof coords.speed === "number" ? coords.speed : null;
+          typeof coords.speed === "number" ? Math.round(coords.speed) : null;
 
         this.lat = latitude;
         this.lng = longitude;
