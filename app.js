@@ -3,6 +3,9 @@ const { createApp } = Vue;
 // เก็บ instance ของ Firebase ไว้นอก Vue เพื่อไม่ให้ถูก proxy
 let firebaseDb = null;
 
+// เก็บ Wake Lock sentinel ไว้นอก Vue
+let wakeLock = null;
+
 function pad(n) {
   return String(Math.abs(n)).padStart(2, "0");
 }
@@ -44,6 +47,8 @@ createApp({
       timestampiso: null,
 
       gpsReady: false,
+      wakeLockSupported: "wakeLock" in navigator,
+      wakeLockActive: false,
 
       // เก็บเป็น string เพื่อพิมพ์แล้วไม่เด้งกลับ
       minAccuracyMetersInput: "50",
@@ -143,6 +148,58 @@ createApp({
         console.error(err);
         this.setStatus(`เริ่ม Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
         return false;
+      }
+    },
+
+    async requestWakeLock() {
+      if (!this.wakeLockSupported) {
+        this.wakeLockActive = false;
+        return false;
+      }
+
+      try {
+        if (wakeLock) {
+          return true;
+        }
+
+        wakeLock = await navigator.wakeLock.request("screen");
+        this.wakeLockActive = true;
+        this.log("เปิด Wake Lock แล้ว");
+
+        wakeLock.addEventListener("release", () => {
+          this.wakeLockActive = false;
+          wakeLock = null;
+          this.log("Wake Lock ถูกปล่อย");
+        });
+
+        return true;
+      } catch (err) {
+        console.warn(err);
+        this.wakeLockActive = false;
+        this.log(`ขอ Wake Lock ไม่สำเร็จ: ${err.message || err}`);
+        return false;
+      }
+    },
+
+    async reRequestWakeLockIfNeeded() {
+      if (!this.tracking) return;
+      if (!this.wakeLockSupported) return;
+
+      if (document.visibilityState === "visible") {
+        await this.requestWakeLock();
+      }
+    },
+
+    async releaseWakeLock() {
+      try {
+        if (wakeLock) {
+          await wakeLock.release();
+          wakeLock = null;
+        }
+      } catch (err) {
+        console.warn(err);
+      } finally {
+        this.wakeLockActive = false;
       }
     },
 
@@ -261,7 +318,7 @@ createApp({
       this.setStatus(map[err.code] || err.message || "เกิดข้อผิดพลาด", "error");
     },
 
-    startTracking() {
+    async startTracking() {
       if (!("geolocation" in navigator)) {
         this.setStatus("เบราว์เซอร์นี้ไม่รองรับ Geolocation", "error");
         return;
@@ -272,6 +329,8 @@ createApp({
       this.tracking = true;
       this.gpsReady = false;
       this.setStatus("กำลังขอสิทธิ์ GPS...", "info");
+
+      await this.requestWakeLock();
 
       const options = {
         enableHighAccuracy: true,
@@ -286,12 +345,13 @@ createApp({
       );
     },
 
-    stopTracking() {
+    async stopTracking() {
       if (this.watchId !== null) {
         navigator.geolocation.clearWatch(this.watchId);
         this.watchId = null;
       }
       this.tracking = false;
+      await this.releaseWakeLock();
       this.setStatus("หยุดติดตามแล้ว", "info");
     },
 
@@ -324,13 +384,26 @@ createApp({
 
   mounted() {
     this.beforeUnloadHandler = () => this.stopTracking();
+
+    this.visibilityHandler = () => {
+      if (document.visibilityState === "visible") {
+        this.reRequestWakeLockIfNeeded();
+      }
+    };
+
     window.addEventListener("beforeunload", this.beforeUnloadHandler);
+    document.addEventListener("visibilitychange", this.visibilityHandler);
   },
 
   beforeUnmount() {
     this.stopTracking();
+
     if (this.beforeUnloadHandler) {
       window.removeEventListener("beforeunload", this.beforeUnloadHandler);
+    }
+
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
     }
   }
 }).mount("#app");
