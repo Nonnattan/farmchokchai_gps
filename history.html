@@ -197,6 +197,7 @@
           บนแผนที่ฟรีด้วย Leaflet + OpenStreetMap
         </p>
       </header>
+
       <a href="index.html" class="btn secondary">ย้อนกลับ</a>
 
       <section class="card controls">
@@ -218,6 +219,19 @@
         <div class="field">
           <label>วันที่สิ้นสุด</label>
           <input v-model="toDate" type="date" />
+        </div>
+
+        <div class="field">
+          <label>ตัดเส้นเมื่อห่างกันเกิน (นาที)</label>
+          <input
+            v-model="gapMinutesInput"
+            inputmode="numeric"
+            placeholder="เช่น 10"
+          />
+          <small
+            >ถ้าข้อมูลห่างกันเกินค่านี้ ระบบจะแยกเป็นอีกเส้น
+            ไม่ลากข้ามช่องว่าง</small
+          >
         </div>
 
         <div class="field">
@@ -286,12 +300,18 @@
               <span class="pill">สถานะ: {{ status }}</span>
               <span class="pill">ทะเบียน: {{ safeVehicleId }}</span>
             </div>
+            <div class="pill-row">
+              <span class="pill"
+                >จำนวนช่วงเส้น: {{ routeSegments.length }}</span
+              >
+              <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
+            </div>
           </div>
 
           <p class="status" :class="statusType">{{ status }}</p>
           <p class="small-note">
             ข้อมูลจะเรียงตาม key timestampiso ที่บันทึกไว้จากหน้าเดิม
-            แล้วค่อยนำไปวาดเป็น polyline
+            แล้วค่อยนำไปวาดเป็น polyline แบบแยกช่วง ไม่ลากข้ามข้อมูลที่หายไป
           </p>
 
           <div v-if="showTable" class="table-wrap" style="margin-top: 14px">
@@ -344,7 +364,7 @@
 
       let firebaseDb = null;
       let mapInstance = null;
-      let routeLayer = null;
+      let routeLayers = [];
       let pointLayers = [];
       let liveRef = null;
       let liveCallback = null;
@@ -385,6 +405,7 @@
             vehicleId: "GPS_01",
             fromDate: "",
             toDate: "",
+            gapMinutesInput: "10",
             liveMode: false,
             showTable: true,
 
@@ -404,6 +425,15 @@
             return this.sanitizeVehicleId(this.vehicleId);
           },
 
+          gapThresholdMinutes() {
+            const n = Number(this.gapMinutesInput);
+            return Number.isFinite(n) && n >= 0 ? n : 10;
+          },
+
+          gapThresholdMs() {
+            return this.gapThresholdMinutes * 60 * 1000;
+          },
+
           filteredPoints() {
             const from = this.fromDate
               ? new Date(`${this.fromDate}T00:00:00`)
@@ -420,19 +450,55 @@
             });
           },
 
-          totalDistanceKm() {
+          routeSegments() {
             const pts = this.filteredPoints;
-            if (pts.length < 2) return 0;
+            if (!pts.length) return [];
+
+            const segments = [];
+            let current = [pts[0]];
+
+            for (let i = 1; i < pts.length; i += 1) {
+              const prev = pts[i - 1];
+              const curr = pts[i];
+
+              const prevTime = prev.date ? prev.date.getTime() : null;
+              const currTime = curr.date ? curr.date.getTime() : null;
+
+              const isGap =
+                prevTime !== null &&
+                currTime !== null &&
+                currTime - prevTime > this.gapThresholdMs;
+
+              if (isGap) {
+                if (current.length) segments.push(current);
+                current = [curr];
+              } else {
+                current.push(curr);
+              }
+            }
+
+            if (current.length) segments.push(current);
+            return segments;
+          },
+
+          totalDistanceKm() {
+            const segments = this.routeSegments;
+            if (!segments.length) return 0;
 
             let sum = 0;
-            for (let i = 1; i < pts.length; i += 1) {
-              sum += haversineMeters(
-                pts[i - 1].lat,
-                pts[i - 1].lng,
-                pts[i].lat,
-                pts[i].lng,
-              );
+
+            for (const seg of segments) {
+              if (seg.length < 2) continue;
+              for (let i = 1; i < seg.length; i += 1) {
+                sum += haversineMeters(
+                  seg[i - 1].lat,
+                  seg[i - 1].lng,
+                  seg[i].lat,
+                  seg[i].lng,
+                );
+              }
             }
+
             return sum / 1000;
           },
 
@@ -529,10 +595,8 @@
           resetMapLayers() {
             if (!mapInstance) return;
 
-            if (routeLayer) {
-              routeLayer.remove();
-              routeLayer = null;
-            }
+            routeLayers.forEach((layer) => layer.remove());
+            routeLayers = [];
 
             pointLayers.forEach((layer) => layer.remove());
             pointLayers = [];
@@ -644,61 +708,98 @@
               return;
             }
 
-            const latlngs = pts.map((p) => [p.lat, p.lng]);
+            const segments = this.routeSegments;
 
-            routeLayer = L.polyline(latlngs, {
-              color: "#38bdf8",
-              weight: 5,
-              opacity: 0.95,
-              lineCap: "round",
-              lineJoin: "round",
-            }).addTo(mapInstance);
+            if (!segments.length) {
+              this.setStatus("ไม่พบข้อมูลที่ใช้วาดเส้น", "warn");
+              return;
+            }
 
-            const start = pts[0];
-            const end = pts[pts.length - 1];
+            let polyCount = 0;
 
-            const startMarker = L.circleMarker([start.lat, start.lng], {
-              radius: 8,
-              color: "#16a34a",
-              fillColor: "#22c55e",
-              fillOpacity: 0.9,
-              weight: 3,
-            })
-              .addTo(mapInstance)
-              .bindPopup(`จุดเริ่มต้น<br>${start.timestampiso}`);
+            segments.forEach((segment, segIndex) => {
+              if (segment.length < 2) return;
 
-            const endMarker = L.circleMarker([end.lat, end.lng], {
-              radius: 8,
-              color: "#dc2626",
-              fillColor: "#ef4444",
-              fillOpacity: 0.95,
-              weight: 3,
-            })
-              .addTo(mapInstance)
-              .bindPopup(`จุดล่าสุด<br>${end.timestampiso}`);
+              polyCount += 1;
 
-            pointLayers.push(startMarker, endMarker);
+              const latlngs = segment.map((p) => [p.lat, p.lng]);
 
-            pts.forEach((p, idx) => {
-              if (idx === 0 || idx === pts.length - 1) return;
+              const polyline = L.polyline(latlngs, {
+                color: "#38bdf8",
+                weight: 5,
+                opacity: 0.95,
+                lineCap: "round",
+                lineJoin: "round",
+              }).addTo(mapInstance);
 
-              const marker = L.circleMarker([p.lat, p.lng], {
-                radius: 5,
-                color: "#e2e8f0",
-                fillColor: "#60a5fa",
-                fillOpacity: 0.7,
-                weight: 2,
+              routeLayers.push(polyline);
+
+              const start = segment[0];
+              const end = segment[segment.length - 1];
+
+              const startMarker = L.circleMarker([start.lat, start.lng], {
+                radius: 8,
+                color: "#16a34a",
+                fillColor: "#22c55e",
+                fillOpacity: 0.9,
+                weight: 3,
               })
                 .addTo(mapInstance)
                 .bindPopup(
-                  `<strong>#${idx + 1}</strong><br>${p.timestampiso}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
+                  `ช่วง ${segIndex + 1} เริ่มต้น<br>${start.timestampiso}`,
                 );
 
-              pointLayers.push(marker);
+              const endMarker = L.circleMarker([end.lat, end.lng], {
+                radius: 8,
+                color: "#dc2626",
+                fillColor: "#ef4444",
+                fillOpacity: 0.95,
+                weight: 3,
+              })
+                .addTo(mapInstance)
+                .bindPopup(
+                  `ช่วง ${segIndex + 1} สิ้นสุด<br>${end.timestampiso}`,
+                );
+
+              pointLayers.push(startMarker, endMarker);
+
+              segment.forEach((p, idx) => {
+                if (idx === 0 || idx === segment.length - 1) return;
+
+                const marker = L.circleMarker([p.lat, p.lng], {
+                  radius: 5,
+                  color: "#e2e8f0",
+                  fillColor: "#60a5fa",
+                  fillOpacity: 0.7,
+                  weight: 2,
+                })
+                  .addTo(mapInstance)
+                  .bindPopup(
+                    `<strong>${p.timestampiso}</strong><br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
+                  );
+
+                pointLayers.push(marker);
+              });
             });
 
             this.fitToRoute();
-            this.setStatus(`โหลดข้อมูล ${pts.length} จุดแล้ว`, "ok");
+
+            if (polyCount === 0) {
+              this.setStatus(
+                "พบข้อมูล แต่ยังมีแค่จุดเดี่ยว ไม่มีเส้นให้วาด",
+                "warn",
+              );
+              return;
+            }
+
+            if (segments.length > 1) {
+              this.setStatus(
+                `โหลดข้อมูล ${pts.length} จุดแล้ว และแยกเป็น ${polyCount} ช่วง`,
+                "ok",
+              );
+            } else {
+              this.setStatus(`โหลดข้อมูล ${pts.length} จุดแล้ว`, "ok");
+            }
           },
 
           async loadTrack() {
