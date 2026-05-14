@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f172a" />
-    <title>GPS History + Polyline (Responsive 2 Vehicles)</title>
+    <title>GPS History + Polyline (History Only)</title>
     <link rel="stylesheet" href="style.css" />
     <link
       rel="stylesheet"
@@ -92,6 +92,7 @@
         gap: 10px;
         align-items: center;
         margin-bottom: 14px;
+        flex-wrap: wrap;
       }
 
       .btn {
@@ -211,6 +212,12 @@
         user-select: none;
       }
 
+      .pill input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: #2563eb;
+      }
+
       .mini-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -268,34 +275,6 @@
       .split-info {
         display: grid;
         gap: 10px;
-      }
-
-      .legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .legend-item {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        border-radius: 999px;
-        padding: 7px 10px;
-        border: 1px solid rgba(148, 163, 184, 0.14);
-        background: rgba(15, 23, 42, 0.95);
-        color: #cbd5e1;
-        font-size: 13px;
-        font-weight: 700;
-        cursor: pointer;
-        user-select: none;
-      }
-
-      .legend-swatch {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        flex: 0 0 10px;
       }
 
       .track-cards {
@@ -405,7 +384,7 @@
 
       .actions {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 10px;
       }
 
@@ -421,6 +400,10 @@
         .table-wrap {
           max-height: none;
           overflow-x: auto;
+        }
+
+        .actions {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
@@ -491,8 +474,7 @@
           gap: 6px;
         }
 
-        .pill,
-        .legend-item {
+        .pill {
           font-size: 12px;
           padding: 6px 9px;
         }
@@ -514,8 +496,8 @@
         <div class="hero-badge">GPS History + Polyline</div>
         <h1>หน้าแสดงข้อมูลย้อนหลังและวาดเส้นทาง 2 คัน</h1>
         <p class="subtitle">
-          เลือกดูรถได้ 1–2 คันพร้อมกัน เปิด/ปิดคันที่ต้องการได้ด้วย checkbox ใช้
-          Leaflet + OpenStreetMap และ Firebase Realtime Database
+          แสดงข้อมูลย้อนหลังแบบอัตโนมัติจาก Vehicle ID ที่กรอกไว้ ใช้ Leaflet +
+          OpenStreetMap และ Firebase Realtime Database
         </p>
       </header>
 
@@ -564,27 +546,9 @@
             inputmode="numeric"
             placeholder="เช่น 10"
           />
-          <small
-            >ถ้าข้อมูลห่างกันเกินค่านี้ ระบบจะแยกเป็นอีกเส้น
-            ไม่ลากข้ามช่องว่าง</small
-          >
-        </div>
-
-        <div class="field">
-          <label>โหมดอัปเดต</label>
-          <div class="pill-row">
-            <label class="pill">
-              <input v-model="liveMode" type="checkbox" />
-              ติดตามแบบเรียลไทม์
-            </label>
-            <label class="pill">
-              <input v-model="showTable" type="checkbox" />
-              แสดงตารางจุด
-            </label>
-          </div>
-          <small
-            >ถ้าเปิด live mode ระบบจะฟังข้อมูลใหม่จาก Firebase อัตโนมัติ</small
-          >
+          <small>
+            ถ้าข้อมูลห่างกันเกินค่านี้ ระบบจะแยกเป็นอีกเส้น ไม่ลากข้ามช่องว่าง
+          </small>
         </div>
 
         <div class="field full">
@@ -596,9 +560,16 @@
             <button
               class="btn secondary"
               @click="fitToRoute"
-              :disabled="!allFilteredPoints.length"
+              :disabled="!visibleAllFilteredPoints.length"
             >
               จัดขอบแผนที่
+            </button>
+            <button
+              class="btn secondary"
+              @click="exportCsv"
+              :disabled="!visibleAllFilteredPoints.length"
+            >
+              Export CSV
             </button>
             <button class="btn danger" @click="clearTrack">ล้างข้อมูล</button>
           </div>
@@ -608,7 +579,7 @@
       <section class="mini-grid">
         <div class="mini-stat">
           <span>จุดที่แสดง</span>
-          <strong>{{ allFilteredPoints.length }}</strong>
+          <strong>{{ visibleAllFilteredPoints.length }}</strong>
         </div>
         <div class="mini-stat">
           <span>ระยะทางรวม</span>
@@ -621,6 +592,33 @@
       </section>
 
       <section class="page-grid">
+        <section class="card right-card">
+          <h2 style="margin-top: 0">ตัวกรองรถ</h2>
+
+          <div class="pill-row" style="margin-bottom: 12px">
+            <label class="pill">
+              <input
+                type="checkbox"
+                v-model="showVehicle1"
+                @change="renderRoute"
+              />
+              แสดงคันที่ 1 — {{ vehicleId1 || '-' }}
+            </label>
+
+            <label v-if="vehicleId2.trim()" class="pill">
+              <input
+                type="checkbox"
+                v-model="showVehicle2"
+                @change="renderRoute"
+              />
+              แสดงคันที่ 2 — {{ vehicleId2 || '-' }}
+            </label>
+
+            <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
+            <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
+          </div>
+        </section>
+
         <section class="card map-wrap">
           <div id="map"></div>
         </section>
@@ -630,33 +628,23 @@
 
           <div class="split-info">
             <div class="pill-row">
-              <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
-              <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
-            </div>
-
-            <div class="legend">
-              <label
+              <span
                 v-for="track in trackSummaries"
                 :key="track.slot"
-                class="legend-item"
+                class="pill"
               >
-                <input
-                  type="checkbox"
-                  v-model="visibleTracks"
-                  :value="track.slot"
-                />
                 <span
-                  class="legend-swatch"
-                  :style="{ background: track.color }"
+                  class="track-dot"
+                  :style="{ background: track.color, width: '10px', height: '10px' }"
                 ></span>
                 {{ track.label }}: {{ track.vehicleId }}
-              </label>
+              </span>
             </div>
           </div>
 
           <div class="track-cards">
             <article
-              v-for="track in visibleTrackSummaries"
+              v-for="track in trackSummaries"
               :key="track.slot"
               class="track-card"
             >
@@ -710,7 +698,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(p, idx) in allFilteredPoints" :key="p.key">
+                <tr v-for="(p, idx) in visibleAllFilteredPoints" :key="p.key">
                   <td>{{ idx + 1 }}</td>
                   <td>
                     <span
@@ -719,8 +707,8 @@
                       :style="{ borderColor: p.color }"
                     >
                       <span
-                        class="legend-swatch"
-                        :style="{ background: p.color }"
+                        class="track-dot"
+                        :style="{ background: p.color, width: '10px', height: '10px' }"
                       ></span>
                       {{ p.label }}
                     </span>
@@ -734,7 +722,7 @@
                     <button class="row-btn" @click="focusPoint(p)">ดู</button>
                   </td>
                 </tr>
-                <tr v-if="!allFilteredPoints.length">
+                <tr v-if="!visibleAllFilteredPoints.length">
                   <td
                     colspan="8"
                     style="
@@ -761,7 +749,6 @@
       let mapInstance = null;
       let routeLayers = [];
       let pointLayers = [];
-      let liveListeners = [];
 
       function formatNum(n, digits = 6) {
         return typeof n === "number" && Number.isFinite(n)
@@ -793,6 +780,12 @@
         return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       }
 
+      function escapeCsv(value) {
+        const s = String(value ?? "");
+        if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+      }
+
       createApp({
         data() {
           return {
@@ -801,9 +794,9 @@
             fromDate: "",
             toDate: "",
             gapMinutesInput: "10",
-            liveMode: false,
             showTable: true,
-            visibleTracks: ["v1", "v2"],
+            showVehicle1: true,
+            showVehicle2: true,
 
             tracks: {
               v1: {
@@ -901,12 +894,14 @@
           },
 
           visibleTrackSummaries() {
-            return this.trackSummaries.filter((track) =>
-              this.visibleTracks.includes(track.slot),
-            );
+            return this.trackSummaries.filter((track) => {
+              if (track.slot === "v1") return this.showVehicle1;
+              if (track.slot === "v2") return this.showVehicle2;
+              return true;
+            });
           },
 
-          allFilteredPoints() {
+          visibleAllFilteredPoints() {
             const rows = [];
 
             for (const track of this.visibleTrackSummaries) {
@@ -939,7 +934,7 @@
           },
 
           totalDistanceText() {
-            return this.allFilteredPoints.length >= 2
+            return this.visibleAllFilteredPoints.length >= 2
               ? `${this.totalDistanceKm.toFixed(2)} km`
               : "0.00 km";
           },
@@ -955,14 +950,6 @@
         },
 
         watch: {
-          liveMode() {
-            this.loadTracks();
-          },
-
-          visibleTracks() {
-            this.renderRoute();
-          },
-
           fromDate() {
             this.renderRoute();
           },
@@ -972,6 +959,14 @@
           },
 
           gapMinutesInput() {
+            this.renderRoute();
+          },
+
+          showVehicle1() {
+            this.renderRoute();
+          },
+
+          showVehicle2() {
             this.renderRoute();
           },
         },
@@ -1118,9 +1113,12 @@
           },
 
           fitToRoute() {
-            if (!mapInstance || !this.allFilteredPoints.length) return;
+            if (!mapInstance || !this.visibleAllFilteredPoints.length) return;
 
-            const latlngs = this.allFilteredPoints.map((p) => [p.lat, p.lng]);
+            const latlngs = this.visibleAllFilteredPoints.map((p) => [
+              p.lat,
+              p.lng,
+            ]);
             const bounds = L.latLngBounds(latlngs);
 
             if (bounds.isValid()) {
@@ -1160,15 +1158,6 @@
             return typeof value === "number" && Number.isFinite(value)
               ? `${formatInt(value)} m`
               : "-";
-          },
-
-          detachLiveListener() {
-            liveListeners.forEach(({ ref, cb }) => {
-              try {
-                ref.off("value", cb);
-              } catch (e) {}
-            });
-            liveListeners = [];
           },
 
           parseSnapshot(snapshot) {
@@ -1363,53 +1352,27 @@
 
             this.loading = true;
             this.setStatus("กำลังดึงข้อมูล...", "info");
-            this.detachLiveListener();
 
             try {
-              if (this.liveMode) {
-                configs.forEach((cfg) => {
-                  const ref = firebaseDb.ref(`locations/${cfg.vehicleId}`);
-                  const cb = (snapshot) => {
-                    const points = this.parseSnapshot(snapshot);
-                    this.setTrackData(cfg.slot, points);
-                    this.renderRoute();
-                    this.loading = false;
+              const results = await Promise.all(
+                configs.map(async (cfg) => {
+                  const snapshot = await firebaseDb
+                    .ref(`locations/${cfg.vehicleId}`)
+                    .orderByKey()
+                    .once("value");
+
+                  return {
+                    slot: cfg.slot,
+                    points: this.parseSnapshot(snapshot),
                   };
+                }),
+              );
 
-                  liveListeners.push({ ref, cb });
+              results.forEach((r) => {
+                this.setTrackData(r.slot, r.points);
+              });
 
-                  ref.on("value", cb, (err) => {
-                    console.error(err);
-                    this.tracks[cfg.slot].status = "ดึงข้อมูลไม่สำเร็จ";
-                    this.tracks[cfg.slot].statusType = "error";
-                    this.setStatus(
-                      `ดึงข้อมูล ${cfg.vehicleId} ไม่สำเร็จ: ${err.message || err}`,
-                      "error",
-                    );
-                    this.loading = false;
-                  });
-                });
-              } else {
-                const results = await Promise.all(
-                  configs.map(async (cfg) => {
-                    const snapshot = await firebaseDb
-                      .ref(`locations/${cfg.vehicleId}`)
-                      .orderByKey()
-                      .once("value");
-
-                    return {
-                      slot: cfg.slot,
-                      points: this.parseSnapshot(snapshot),
-                    };
-                  }),
-                );
-
-                results.forEach((r) => {
-                  this.setTrackData(r.slot, r.points);
-                });
-
-                this.renderRoute();
-              }
+              this.renderRoute();
             } catch (err) {
               console.error(err);
               this.setStatus(
@@ -1417,10 +1380,64 @@
                 "error",
               );
             } finally {
-              if (!this.liveMode) {
-                this.loading = false;
-              }
+              this.loading = false;
             }
+          },
+
+          exportCsv() {
+            const rows = this.visibleAllFilteredPoints;
+            if (!rows.length) return;
+
+            const headers = [
+              "ลำดับ",
+              "รถ",
+              "vehicleId",
+              "เวลา",
+              "Lat",
+              "Lng",
+              "Speed(m/s)",
+              "Speed(km/h)",
+              "Accuracy(m)",
+            ];
+
+            const csvLines = [headers.map(escapeCsv).join(",")];
+
+            rows.forEach((p, idx) => {
+              csvLines.push(
+                [
+                  idx + 1,
+                  p.label,
+                  p.vehicleId,
+                  p.timestampiso,
+                  p.lat,
+                  p.lng,
+                  p.speed ?? "",
+                  typeof p.speed === "number" && Number.isFinite(p.speed)
+                    ? (p.speed * 3.6).toFixed(1)
+                    : "",
+                  p.accuracy ?? "",
+                ]
+                  .map(escapeCsv)
+                  .join(","),
+              );
+            });
+
+            const blob = new Blob(["\ufeff" + csvLines.join("\n")], {
+              type: "text/csv;charset=utf-8;",
+            });
+
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, "0");
+            const dd = String(today.getDate()).padStart(2, "0");
+            a.href = url;
+            a.download = `gps-history-${yyyy}${mm}${dd}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
           },
 
           clearTrack() {
@@ -1434,7 +1451,6 @@
             this.tracks.v2.status = "ยังไม่ได้โหลด";
             this.tracks.v2.statusType = "info";
 
-            this.detachLiveListener();
             this.resetMapLayers();
             this.setStatus("ล้างข้อมูลบนหน้าแล้ว", "info");
 
@@ -1460,8 +1476,6 @@
         },
 
         beforeUnmount() {
-          this.detachLiveListener();
-
           if (this.resizeHandler) {
             window.removeEventListener("resize", this.resizeHandler);
           }
