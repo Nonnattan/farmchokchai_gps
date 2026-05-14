@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0f172a" />
-    <title>GPS History + Polyline</title>
+    <title>GPS History + Polyline (Responsive 2 Vehicles)</title>
     <link rel="stylesheet" href="style.css" />
     <link
       rel="stylesheet"
@@ -14,47 +14,205 @@
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <style>
-      .page-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
-        gap: 14px;
-        align-items: start;
+      :root {
+        --card-bg: rgba(11, 18, 32, 0.92);
+        --border: rgba(148, 163, 184, 0.14);
+        --border-strong: rgba(148, 163, 184, 0.18);
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --head: #f8fafc;
       }
 
-      .map-wrap {
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
         padding: 0;
-        overflow: hidden;
       }
 
-      #map {
-        width: 100%;
-        height: 560px;
+      body {
+        background: #0f172a;
+        color: var(--text);
+      }
+
+      .app {
+        width: min(1400px, calc(100% - 24px));
+        margin: 0 auto;
+        padding: 12px 0 28px;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
         border-radius: 24px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      }
+
+      .hero {
+        padding: 20px;
+        margin-bottom: 14px;
+      }
+
+      .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.96);
+        border: 1px solid var(--border);
+        color: #cbd5e1;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
+      .hero h1 {
+        margin: 12px 0 8px;
+        font-size: clamp(24px, 4vw, 38px);
+        line-height: 1.15;
+        color: var(--head);
+      }
+
+      .subtitle {
+        margin: 0;
+        color: #cbd5e1;
+        line-height: 1.65;
+        font-size: 14px;
+      }
+
+      .topbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 14px;
+      }
+
+      .btn {
+        border: 0;
+        border-radius: 14px;
+        padding: 11px 16px;
+        font-weight: 800;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        transition:
+          transform 0.12s ease,
+          opacity 0.12s ease,
+          background 0.12s ease;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .btn.primary {
+        background: #2563eb;
+        color: white;
+      }
+
+      .btn.secondary {
+        background: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      .btn.danger {
+        background: #7f1d1d;
+        color: #fee2e2;
+        border: 1px solid rgba(248, 113, 113, 0.22);
       }
 
       .controls {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
+        padding: 16px;
+        margin-bottom: 14px;
       }
 
-      .controls .field:first-child {
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field:first-child {
         grid-column: 1 / -1;
+      }
+
+      .field label {
+        font-size: 13px;
+        font-weight: 800;
+        color: #e2e8f0;
+      }
+
+      .field input {
+        width: 100%;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 14px;
+        background: rgba(15, 23, 42, 0.9);
+        color: #e2e8f0;
+        padding: 12px 14px;
+        outline: none;
+      }
+
+      .field input::placeholder {
+        color: #64748b;
+      }
+
+      .field small {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 7px 11px;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        color: #cbd5e1;
+        font-size: 13px;
+        font-weight: 700;
+        user-select: none;
       }
 
       .mini-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 12px;
+        margin-bottom: 14px;
       }
 
       .mini-stat {
-        background: rgba(11, 18, 32, 0.92);
-        border: 1px solid rgba(51, 65, 85, 0.95);
+        background: var(--card-bg);
+        border: 1px solid var(--border);
         border-radius: 18px;
         padding: 14px;
-        min-height: 88px;
+        min-height: 90px;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
@@ -74,7 +232,117 @@
         word-break: break-word;
       }
 
+      .page-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .map-wrap {
+        padding: 0;
+        overflow: hidden;
+      }
+
+      #map {
+        width: 100%;
+        height: clamp(360px, 62vh, 620px);
+        border-radius: 24px;
+      }
+
+      .right-card {
+        padding: 16px;
+      }
+
+      .split-info {
+        display: grid;
+        gap: 10px;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        padding: 7px 10px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        background: rgba(15, 23, 42, 0.95);
+        color: #cbd5e1;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .legend-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        flex: 0 0 10px;
+      }
+
+      .track-cards {
+        display: grid;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .track-card {
+        border-radius: 18px;
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        background: rgba(11, 18, 32, 0.92);
+        padding: 14px;
+      }
+
+      .track-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .track-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        flex: 0 0 12px;
+        box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.04);
+      }
+
+      .track-title {
+        font-weight: 800;
+        font-size: 15px;
+        color: #f8fafc;
+        line-height: 1.35;
+      }
+
+      .track-sub {
+        color: var(--muted);
+        font-size: 13px;
+        margin-top: 3px;
+        line-height: 1.5;
+      }
+
+      .status {
+        margin-top: 12px;
+        font-weight: 800;
+      }
+
+      .small-note {
+        color: var(--muted);
+        line-height: 1.6;
+        margin: 10px 0 0;
+        font-size: 13px;
+      }
+
       .table-wrap {
+        margin-top: 14px;
         max-height: 560px;
         overflow: auto;
         border-radius: 18px;
@@ -124,38 +392,10 @@
         background: rgba(37, 99, 235, 0.18);
       }
 
-      .status {
-        margin-top: 12px;
-      }
-
-      .small-note {
-        color: var(--muted);
-        line-height: 1.6;
-        margin: 10px 0 0;
-      }
-
-      .split-info {
+      .actions {
         display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
-      }
-
-      .pill-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border-radius: 999px;
-        padding: 7px 11px;
-        background: rgba(15, 23, 42, 0.95);
-        border: 1px solid rgba(148, 163, 184, 0.14);
-        color: #cbd5e1;
-        font-size: 13px;
-        font-weight: 700;
       }
 
       @media (max-width: 980px) {
@@ -163,52 +403,142 @@
           grid-template-columns: 1fr;
         }
 
-        #map,
-        .table-wrap {
-          max-height: none;
-          height: 420px;
+        .right-card {
+          order: 2;
         }
-      }
 
-      @media (max-width: 720px) {
-        .controls,
+        .map-wrap {
+          order: 1;
+        }
+
         .mini-grid {
           grid-template-columns: 1fr;
         }
 
         #map {
-          height: 360px;
+          height: 420px;
+        }
+
+        .table-wrap {
+          max-height: none;
+          overflow-x: auto;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .app {
+          width: min(100% - 16px, 1400px);
+          padding-top: 8px;
+        }
+
+        .hero,
+        .controls,
+        .right-card,
+        .mini-stat {
+          border-radius: 18px;
+        }
+
+        .hero {
+          padding: 16px;
+        }
+
+        .controls {
+          grid-template-columns: 1fr;
+          padding: 14px;
+        }
+
+        .field:first-child {
+          grid-column: auto;
         }
 
         .actions {
           grid-template-columns: 1fr;
         }
+
+        #map {
+          height: 360px;
+          border-radius: 18px;
+        }
+
+        .track-cards {
+          gap: 10px;
+        }
+
+        .table-wrap {
+          font-size: 13px;
+        }
+
+        thead th,
+        tbody td {
+          padding: 9px 8px;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .topbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .btn {
+          width: 100%;
+        }
+
+        .pill-row {
+          gap: 6px;
+        }
+
+        .pill,
+        .legend-item {
+          font-size: 12px;
+          padding: 6px 9px;
+        }
+
+        .track-title {
+          font-size: 14px;
+        }
+
+        .mini-stat strong {
+          font-size: 17px;
+        }
       }
     </style>
   </head>
+
   <body>
     <div id="app" class="app">
       <header class="hero card">
         <div class="hero-badge">GPS History + Polyline</div>
-        <h1>หน้าแสดงข้อมูลย้อนหลังและวาดเส้นทาง</h1>
+        <h1>หน้าแสดงข้อมูลย้อนหลังและวาดเส้นทาง 2 คัน</h1>
         <p class="subtitle">
-          ดึงข้อมูลจาก Firebase Realtime Database ที่ path
-          <strong>locations/{vehicle_id}</strong> แล้วแสดงเป็นจุดและ polyline
-          บนแผนที่ฟรีด้วย Leaflet + OpenStreetMap
+          เลือกดูรถได้ 1–2 คันพร้อมกัน เปิด/ปิดคันที่ต้องการได้ด้วย checkbox ใช้
+          Leaflet + OpenStreetMap และ Firebase Realtime Database
         </p>
       </header>
 
-      <a href="index.html" class="btn secondary">ย้อนกลับ</a>
+      <div class="topbar">
+        <a href="index.html" class="btn secondary">ย้อนกลับ</a>
+      </div>
 
       <section class="card controls">
         <div class="field">
-          <label>ทะเบียนรถ / Vehicle ID</label>
+          <label>ทะเบียนรถ / Vehicle ID คันที่ 1</label>
           <input
-            v-model.trim="vehicleId"
+            v-model.trim="vehicleId1"
             placeholder="เช่น GPS_01"
-            @keyup.enter="loadTrack"
+            @keyup.enter="loadTracks"
           />
           <small>ใช้รหัสเดียวกับหน้าส่ง GPS เดิม</small>
+        </div>
+
+        <div class="field">
+          <label>ทะเบียนรถ / Vehicle ID คันที่ 2</label>
+          <input
+            v-model.trim="vehicleId2"
+            placeholder="เช่น GPS_02 (ปล่อยว่างได้)"
+            @keyup.enter="loadTracks"
+          />
+          <small>ถ้าไม่กรอก จะดูแค่คันที่ 1</small>
         </div>
 
         <div class="field">
@@ -254,13 +584,13 @@
         <div class="field">
           <label>การใช้งาน</label>
           <div class="actions">
-            <button class="btn primary" @click="loadTrack" :disabled="loading">
+            <button class="btn primary" @click="loadTracks" :disabled="loading">
               {{ loading ? 'กำลังโหลด...' : 'โหลดข้อมูล' }}
             </button>
             <button
               class="btn secondary"
               @click="fitToRoute"
-              :disabled="!filteredPoints.length"
+              :disabled="!allFilteredPoints.length"
             >
               จัดขอบแผนที่
             </button>
@@ -271,8 +601,8 @@
 
       <section class="mini-grid">
         <div class="mini-stat">
-          <span>จุดทั้งหมด</span>
-          <strong>{{ filteredPoints.length }}</strong>
+          <span>จุดที่แสดง</span>
+          <strong>{{ allFilteredPoints.length }}</strong>
         </div>
         <div class="mini-stat">
           <span>ระยะทางรวม</span>
@@ -289,36 +619,82 @@
           <div id="map"></div>
         </section>
 
-        <section class="card">
-          <h2>สรุปเส้นทาง</h2>
+        <section class="card right-card">
+          <h2 style="margin-top: 0">สรุปเส้นทาง</h2>
+
           <div class="split-info">
             <div class="pill-row">
-              <span class="pill">เริ่ม: {{ startPointText }}</span>
-              <span class="pill">จบ: {{ endPointText }}</span>
-            </div>
-            <div class="pill-row">
-              <span class="pill">สถานะ: {{ status }}</span>
-              <span class="pill">ทะเบียน: {{ safeVehicleId }}</span>
-            </div>
-            <div class="pill-row">
-              <span class="pill"
-                >จำนวนช่วงเส้น: {{ routeSegments.length }}</span
-              >
+              <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
               <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
             </div>
+
+            <div class="legend">
+              <label
+                v-for="track in trackSummaries"
+                :key="track.slot"
+                class="legend-item"
+              >
+                <input
+                  type="checkbox"
+                  v-model="visibleTracks"
+                  :value="track.slot"
+                />
+                <span
+                  class="legend-swatch"
+                  :style="{ background: track.color }"
+                ></span>
+                {{ track.label }}: {{ track.vehicleId }}
+              </label>
+            </div>
+          </div>
+
+          <div class="track-cards">
+            <article
+              v-for="track in visibleTrackSummaries"
+              :key="track.slot"
+              class="track-card"
+            >
+              <div class="track-head">
+                <span
+                  class="track-dot"
+                  :style="{ background: track.color }"
+                ></span>
+                <div>
+                  <div class="track-title">
+                    {{ track.label }} — {{ track.vehicleId }}
+                  </div>
+                  <div class="track-sub">
+                    อัปเดตล่าสุด: {{ track.lastUpdatedAt || '-' }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="pill-row">
+                <span class="pill">จุด: {{ track.pointCount }}</span>
+                <span class="pill">ช่วงเส้น: {{ track.segmentCount }}</span>
+                <span class="pill">ระยะทาง: {{ track.distanceText }}</span>
+              </div>
+
+              <div class="track-sub" style="margin-top: 10px">
+                เริ่ม: {{ track.firstText }}<br />
+                จบ: {{ track.lastText }}<br />
+                สถานะ: {{ track.status }}
+              </div>
+            </article>
           </div>
 
           <p class="status" :class="statusType">{{ status }}</p>
           <p class="small-note">
-            ข้อมูลจะเรียงตาม key timestampiso ที่บันทึกไว้จากหน้าเดิม
-            แล้วค่อยนำไปวาดเป็น polyline แบบแยกช่วง ไม่ลากข้ามข้อมูลที่หายไป
+            ระบบจะเรียงข้อมูลตามเวลา และแยกเป็นช่วงถ้าห่างกันเกินค่าที่กำหนด
+            ดังนั้นข้อมูลคนละวันหรือคนละรอบจะไม่ถูกลากเชื่อมมั่ว ๆ
           </p>
 
-          <div v-if="showTable" class="table-wrap" style="margin-top: 14px">
+          <div v-if="showTable" class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>#</th>
+                  <th>รถ</th>
                   <th>เวลา</th>
                   <th>Lat</th>
                   <th>Lng</th>
@@ -328,20 +704,33 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(p, idx) in filteredPoints" :key="p.key || idx">
+                <tr v-for="(p, idx) in allFilteredPoints" :key="p.key">
                   <td>{{ idx + 1 }}</td>
+                  <td>
+                    <span
+                      class="pill"
+                      style="padding: 5px 9px; font-size: 12px"
+                      :style="{ borderColor: p.color }"
+                    >
+                      <span
+                        class="legend-swatch"
+                        :style="{ background: p.color }"
+                      ></span>
+                      {{ p.label }}
+                    </span>
+                  </td>
                   <td>{{ p.timestampiso }}</td>
                   <td>{{ formatCoord(p.lat) }}</td>
                   <td>{{ formatCoord(p.lng) }}</td>
                   <td>{{ formatSpeed(p.speed) }}</td>
                   <td>{{ formatAccuracy(p.accuracy) }}</td>
                   <td>
-                    <button class="row-btn" @click="focusPoint(idx)">ดู</button>
+                    <button class="row-btn" @click="focusPoint(p)">ดู</button>
                   </td>
                 </tr>
-                <tr v-if="!filteredPoints.length">
+                <tr v-if="!allFilteredPoints.length">
                   <td
-                    colspan="7"
+                    colspan="8"
                     style="
                       text-align: center;
                       padding: 22px;
@@ -366,8 +755,7 @@
       let mapInstance = null;
       let routeLayers = [];
       let pointLayers = [];
-      let liveRef = null;
-      let liveCallback = null;
+      let liveListeners = [];
 
       function formatNum(n, digits = 6) {
         return typeof n === "number" && Number.isFinite(n)
@@ -402,29 +790,38 @@
       createApp({
         data() {
           return {
-            vehicleId: "GPS_01",
+            vehicleId1: "GPS_01",
+            vehicleId2: "GPS_02",
             fromDate: "",
             toDate: "",
             gapMinutesInput: "10",
             liveMode: false,
             showTable: true,
+            visibleTracks: ["v1", "v2"],
 
-            points: [],
+            tracks: {
+              v1: {
+                points: [],
+                lastUpdatedAt: null,
+                status: "ยังไม่ได้โหลด",
+                statusType: "info",
+              },
+              v2: {
+                points: [],
+                lastUpdatedAt: null,
+                status: "ยังไม่ได้โหลด",
+                statusType: "info",
+              },
+            },
+
             loading: false,
             status: "พร้อมใช้งาน",
             statusType: "info",
-            lastUpdatedAt: null,
-            selectedIndex: -1,
-
             mapReady: false,
           };
         },
 
         computed: {
-          safeVehicleId() {
-            return this.sanitizeVehicleId(this.vehicleId);
-          },
-
           gapThresholdMinutes() {
             const n = Number(this.gapMinutesInput);
             return Number.isFinite(n) && n >= 0 ? n : 10;
@@ -434,98 +831,142 @@
             return this.gapThresholdMinutes * 60 * 1000;
           },
 
-          filteredPoints() {
-            const from = this.fromDate
-              ? new Date(`${this.fromDate}T00:00:00`)
-              : null;
-            const to = this.toDate
-              ? new Date(`${this.toDate}T23:59:59.999`)
-              : null;
+          selectedDateRangeText() {
+            const from = this.fromDate || "-";
+            const to = this.toDate || "-";
+            return `${from} ถึง ${to}`;
+          },
 
-            return this.points.filter((p) => {
-              if (!p.date) return false;
-              if (from && p.date < from) return false;
-              if (to && p.date > to) return false;
-              return true;
+          vehicleConfigs() {
+            const configs = [
+              {
+                slot: "v1",
+                label: "คันที่ 1",
+                inputId: this.vehicleId1,
+                color: "#38bdf8",
+              },
+            ];
+
+            if (String(this.vehicleId2 || "").trim()) {
+              configs.push({
+                slot: "v2",
+                label: "คันที่ 2",
+                inputId: this.vehicleId2,
+                color: "#f59e0b",
+              });
+            }
+
+            return configs.map((cfg) => ({
+              ...cfg,
+              vehicleId: this.sanitizeVehicleId(cfg.inputId),
+            }));
+          },
+
+          trackSummaries() {
+            return this.vehicleConfigs.map((cfg) => {
+              const rawPoints = this.tracks[cfg.slot]?.points || [];
+              const filteredPoints = this.getFilteredPoints(rawPoints);
+              const segments = this.buildSegments(filteredPoints);
+              const distanceKm = this.distanceKmFromSegments(segments);
+              const activeSegments = segments.filter(
+                (s) => s.length >= 2,
+              ).length;
+
+              return {
+                ...cfg,
+                pointCount: filteredPoints.length,
+                segmentCount: activeSegments,
+                distanceKm,
+                distanceText:
+                  filteredPoints.length >= 2
+                    ? `${distanceKm.toFixed(2)} km`
+                    : "0.00 km",
+                firstText: filteredPoints[0]?.timestampiso || "-",
+                lastText:
+                  filteredPoints[filteredPoints.length - 1]?.timestampiso ||
+                  "-",
+                lastUpdatedAt: this.tracks[cfg.slot]?.lastUpdatedAt || null,
+                status: this.tracks[cfg.slot]?.status || "-",
+                statusType: this.tracks[cfg.slot]?.statusType || "info",
+                filteredPoints,
+                segments,
+              };
             });
           },
 
-          routeSegments() {
-            const pts = this.filteredPoints;
-            if (!pts.length) return [];
+          visibleTrackSummaries() {
+            return this.trackSummaries.filter((track) =>
+              this.visibleTracks.includes(track.slot),
+            );
+          },
 
-            const segments = [];
-            let current = [pts[0]];
+          allFilteredPoints() {
+            const rows = [];
 
-            for (let i = 1; i < pts.length; i += 1) {
-              const prev = pts[i - 1];
-              const curr = pts[i];
-
-              const prevTime = prev.date ? prev.date.getTime() : null;
-              const currTime = curr.date ? curr.date.getTime() : null;
-
-              const isGap =
-                prevTime !== null &&
-                currTime !== null &&
-                currTime - prevTime > this.gapThresholdMs;
-
-              if (isGap) {
-                if (current.length) segments.push(current);
-                current = [curr];
-              } else {
-                current.push(curr);
-              }
+            for (const track of this.visibleTrackSummaries) {
+              track.filteredPoints.forEach((p, idx) => {
+                rows.push({
+                  ...p,
+                  slot: track.slot,
+                  label: track.label,
+                  vehicleId: track.vehicleId,
+                  color: track.color,
+                  indexInTrack: idx,
+                });
+              });
             }
 
-            if (current.length) segments.push(current);
-            return segments;
+            rows.sort((a, b) => {
+              const ta = a.date ? a.date.getTime() : 0;
+              const tb = b.date ? b.date.getTime() : 0;
+              return ta - tb;
+            });
+
+            return rows;
           },
 
           totalDistanceKm() {
-            const segments = this.routeSegments;
-            if (!segments.length) return 0;
-
-            let sum = 0;
-
-            for (const seg of segments) {
-              if (seg.length < 2) continue;
-              for (let i = 1; i < seg.length; i += 1) {
-                sum += haversineMeters(
-                  seg[i - 1].lat,
-                  seg[i - 1].lng,
-                  seg[i].lat,
-                  seg[i].lng,
-                );
-              }
-            }
-
-            return sum / 1000;
+            return this.visibleTrackSummaries.reduce(
+              (sum, track) => sum + track.distanceKm,
+              0,
+            );
           },
 
           totalDistanceText() {
-            return this.filteredPoints.length >= 2
+            return this.allFilteredPoints.length >= 2
               ? `${this.totalDistanceKm.toFixed(2)} km`
               : "0.00 km";
           },
 
-          startPointText() {
-            const p = this.filteredPoints[0];
-            return p ? p.timestampiso : "-";
-          },
-
-          endPointText() {
-            const p = this.filteredPoints[this.filteredPoints.length - 1];
-            return p ? p.timestampiso : "-";
-          },
-
           lastUpdatedText() {
-            return this.lastUpdatedAt || "-";
+            const times = this.visibleTrackSummaries
+              .map((t) => t.lastUpdatedAt)
+              .filter(Boolean);
+
+            if (!times.length) return "-";
+            return times.sort().slice(-1)[0];
           },
         },
 
         watch: {
           liveMode() {
-            this.loadTrack();
+            this.loadTracks();
+          },
+
+          visibleTracks() {
+            this.renderRoute();
+          },
+
+          fromDate() {
+            this.renderRoute();
+          },
+
+          toDate() {
+            this.renderRoute();
+          },
+
+          gapMinutesInput() {
+            this.renderRoute();
           },
         },
 
@@ -602,10 +1043,78 @@
             pointLayers = [];
           },
 
-          fitToRoute() {
-            if (!mapInstance || !this.filteredPoints.length) return;
+          getFilteredPoints(points) {
+            const from = this.fromDate
+              ? new Date(`${this.fromDate}T00:00:00`)
+              : null;
+            const to = this.toDate
+              ? new Date(`${this.toDate}T23:59:59.999`)
+              : null;
 
-            const latlngs = this.filteredPoints.map((p) => [p.lat, p.lng]);
+            return (points || []).filter((p) => {
+              if (!p.date) return false;
+              if (from && p.date < from) return false;
+              if (to && p.date > to) return false;
+              return true;
+            });
+          },
+
+          buildSegments(points) {
+            const pts = points || [];
+            if (!pts.length) return [];
+
+            const segments = [];
+            let current = [pts[0]];
+
+            for (let i = 1; i < pts.length; i += 1) {
+              const prev = pts[i - 1];
+              const curr = pts[i];
+
+              const prevTime = prev.date ? prev.date.getTime() : null;
+              const currTime = curr.date ? curr.date.getTime() : null;
+
+              const isGap =
+                prevTime !== null &&
+                currTime !== null &&
+                currTime - prevTime > this.gapThresholdMs;
+
+              if (isGap) {
+                if (current.length) segments.push(current);
+                current = [curr];
+              } else {
+                current.push(curr);
+              }
+            }
+
+            if (current.length) segments.push(current);
+            return segments;
+          },
+
+          distanceKmFromSegments(segments) {
+            if (!segments || !segments.length) return 0;
+
+            let sum = 0;
+
+            for (const seg of segments) {
+              if (seg.length < 2) continue;
+
+              for (let i = 1; i < seg.length; i += 1) {
+                sum += haversineMeters(
+                  seg[i - 1].lat,
+                  seg[i - 1].lng,
+                  seg[i].lat,
+                  seg[i].lng,
+                );
+              }
+            }
+
+            return sum / 1000;
+          },
+
+          fitToRoute() {
+            if (!mapInstance || !this.allFilteredPoints.length) return;
+
+            const latlngs = this.allFilteredPoints.map((p) => [p.lat, p.lng]);
             const bounds = L.latLngBounds(latlngs);
 
             if (bounds.isValid()) {
@@ -613,20 +1122,18 @@
             }
           },
 
-          focusPoint(index) {
-            const point = this.filteredPoints[index];
-            if (!point || !mapInstance) return;
+          focusPoint(row) {
+            if (!row || !mapInstance) return;
 
-            this.selectedIndex = index;
             mapInstance.setView(
-              [point.lat, point.lng],
+              [row.lat, row.lng],
               Math.max(mapInstance.getZoom(), 16),
             );
 
             const popup = L.popup()
-              .setLatLng([point.lat, point.lng])
+              .setLatLng([row.lat, row.lng])
               .setContent(
-                `<strong>${point.timestampiso}</strong><br/>Lat: ${formatNum(point.lat, 6)}<br/>Lng: ${formatNum(point.lng, 6)}<br/>Speed: ${this.formatSpeed(point.speed)}`,
+                `<strong>${row.label} — ${row.vehicleId}</strong><br/><strong>${row.timestampiso}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(row.lng, 6)}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>Acc: ${this.formatAccuracy(row.accuracy)}`,
               );
 
             popup.openOn(mapInstance);
@@ -650,11 +1157,12 @@
           },
 
           detachLiveListener() {
-            if (liveRef && liveCallback) {
-              liveRef.off("value", liveCallback);
-            }
-            liveRef = null;
-            liveCallback = null;
+            liveListeners.forEach(({ ref, cb }) => {
+              try {
+                ref.off("value", cb);
+              } catch (e) {}
+            });
+            liveListeners = [];
           },
 
           parseSnapshot(snapshot) {
@@ -697,88 +1205,123 @@
             return items;
           },
 
+          setTrackData(slot, points) {
+            this.tracks[slot].points = points;
+            this.tracks[slot].lastUpdatedAt = new Date().toLocaleString(
+              "th-TH",
+            );
+            this.tracks[slot].status = points.length
+              ? `โหลดแล้ว ${points.length} จุด`
+              : "ไม่พบข้อมูล";
+            this.tracks[slot].statusType = points.length ? "ok" : "warn";
+          },
+
           renderRoute() {
             this.resetMapLayers();
 
             if (!mapInstance) this.initMap();
 
-            const pts = this.filteredPoints;
-            if (!pts.length) {
-              this.setStatus("ไม่พบข้อมูลในช่วงวันที่ที่เลือก", "warn");
-              return;
-            }
+            const summaries = this.visibleTrackSummaries;
+            const totalPoints = summaries.reduce(
+              (sum, track) => sum + track.filteredPoints.length,
+              0,
+            );
 
-            const segments = this.routeSegments;
-
-            if (!segments.length) {
-              this.setStatus("ไม่พบข้อมูลที่ใช้วาดเส้น", "warn");
+            if (!totalPoints) {
+              this.setStatus("ไม่พบข้อมูลในช่วงวันที่/รถที่เลือก", "warn");
               return;
             }
 
             let polyCount = 0;
 
-            segments.forEach((segment, segIndex) => {
-              if (segment.length < 2) return;
+            summaries.forEach((track) => {
+              const { filteredPoints: pts, segments, color } = track;
 
-              polyCount += 1;
+              if (!pts.length) return;
 
-              const latlngs = segment.map((p) => [p.lat, p.lng]);
-
-              const polyline = L.polyline(latlngs, {
-                color: "#38bdf8",
-                weight: 5,
-                opacity: 0.95,
-                lineCap: "round",
-                lineJoin: "round",
-              }).addTo(mapInstance);
-
-              routeLayers.push(polyline);
-
-              const start = segment[0];
-              const end = segment[segment.length - 1];
-
-              const startMarker = L.circleMarker([start.lat, start.lng], {
-                radius: 8,
-                color: "#16a34a",
-                fillColor: "#22c55e",
-                fillOpacity: 0.9,
-                weight: 3,
-              })
-                .addTo(mapInstance)
-                .bindPopup(
-                  `ช่วง ${segIndex + 1} เริ่มต้น<br>${start.timestampiso}`,
-                );
-
-              const endMarker = L.circleMarker([end.lat, end.lng], {
-                radius: 8,
-                color: "#dc2626",
-                fillColor: "#ef4444",
-                fillOpacity: 0.95,
-                weight: 3,
-              })
-                .addTo(mapInstance)
-                .bindPopup(
-                  `ช่วง ${segIndex + 1} สิ้นสุด<br>${end.timestampiso}`,
-                );
-
-              pointLayers.push(startMarker, endMarker);
-
-              segment.forEach((p, idx) => {
-                if (idx === 0 || idx === segment.length - 1) return;
-
+              if (pts.length === 1) {
+                const p = pts[0];
                 const marker = L.circleMarker([p.lat, p.lng], {
-                  radius: 5,
-                  color: "#e2e8f0",
-                  fillColor: "#60a5fa",
-                  fillOpacity: 0.7,
-                  weight: 2,
+                  radius: 8,
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.9,
+                  weight: 3,
                 })
                   .addTo(mapInstance)
                   .bindPopup(
-                    `<strong>${p.timestampiso}</strong><br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
+                    `<strong>${track.label} — ${track.vehicleId}</strong><br>${p.timestampiso}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}`,
                   );
 
                 pointLayers.push(marker);
+                return;
+              }
+
+              segments.forEach((segment, segIndex) => {
+                if (!segment.length) return;
+
+                if (segment.length >= 2) {
+                  polyCount += 1;
+
+                  const latlngs = segment.map((p) => [p.lat, p.lng]);
+
+                  const polyline = L.polyline(latlngs, {
+                    color,
+                    weight: 5,
+                    opacity: 0.95,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }).addTo(mapInstance);
+
+                  routeLayers.push(polyline);
+                }
+
+                const start = segment[0];
+                const end = segment[segment.length - 1];
+
+                const startMarker = L.circleMarker([start.lat, start.lng], {
+                  radius: 8,
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.9,
+                  weight: 3,
+                })
+                  .addTo(mapInstance)
+                  .bindPopup(
+                    `${track.label} — ${track.vehicleId}<br>เริ่มช่วง ${segIndex + 1}<br>${start.timestampiso}`,
+                  );
+
+                const endMarker = L.circleMarker([end.lat, end.lng], {
+                  radius: 8,
+                  color,
+                  fillColor: color,
+                  fillOpacity: 0.95,
+                  weight: 3,
+                })
+                  .addTo(mapInstance)
+                  .bindPopup(
+                    `${track.label} — ${track.vehicleId}<br>สิ้นสุดช่วง ${segIndex + 1}<br>${end.timestampiso}`,
+                  );
+
+                pointLayers.push(startMarker, endMarker);
+
+                segment.forEach((p, idx) => {
+                  if (idx === 0 || idx === segment.length - 1) return;
+
+                  const marker = L.circleMarker([p.lat, p.lng], {
+                    radius: 5,
+                    color: "#e2e8f0",
+                    fillColor: color,
+                    fillOpacity: 0.75,
+                    weight: 2,
+                  })
+                    .addTo(mapInstance)
+                    .bindPopup(
+                      `<strong>${track.label} — ${track.vehicleId}</strong><br>${p.timestampiso}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}<br>Acc ${this.formatAccuracy(p.accuracy)}`,
+                    );
+
+                  pointLayers.push(marker);
+                });
               });
             });
 
@@ -786,27 +1329,31 @@
 
             if (polyCount === 0) {
               this.setStatus(
-                "พบข้อมูล แต่ยังมีแค่จุดเดี่ยว ไม่มีเส้นให้วาด",
+                "พบข้อมูล แต่มีแต่จุดเดี่ยว ยังไม่มีเส้นให้วาด",
                 "warn",
               );
               return;
             }
 
-            if (segments.length > 1) {
+            if (summaries.length > 1) {
               this.setStatus(
-                `โหลดข้อมูล ${pts.length} จุดแล้ว และแยกเป็น ${polyCount} ช่วง`,
+                `โหลดข้อมูลรวม ${totalPoints} จุด และแยกเป็น ${polyCount} ช่วง`,
                 "ok",
               );
             } else {
-              this.setStatus(`โหลดข้อมูล ${pts.length} จุดแล้ว`, "ok");
+              this.setStatus(`โหลดข้อมูล ${totalPoints} จุดแล้ว`, "ok");
             }
           },
 
-          async loadTrack() {
+          async loadTracks() {
             if (!this.initFirebase()) return;
 
-            const vehicle_id = this.safeVehicleId;
-            const ref = firebaseDb.ref(`locations/${vehicle_id}`);
+            const configs = this.vehicleConfigs;
+
+            if (!configs.length) {
+              this.setStatus("กรุณากรอก Vehicle ID อย่างน้อย 1 คัน", "warn");
+              return;
+            }
 
             this.loading = true;
             this.setStatus("กำลังดึงข้อมูล...", "info");
@@ -814,26 +1361,47 @@
 
             try {
               if (this.liveMode) {
-                liveRef = ref;
-                liveCallback = (snapshot) => {
-                  this.points = this.parseSnapshot(snapshot);
-                  this.lastUpdatedAt = new Date().toLocaleString("th-TH");
-                  this.renderRoute();
-                  this.loading = false;
-                };
+                configs.forEach((cfg) => {
+                  const ref = firebaseDb.ref(`locations/${cfg.vehicleId}`);
+                  const cb = (snapshot) => {
+                    const points = this.parseSnapshot(snapshot);
+                    this.setTrackData(cfg.slot, points);
+                    this.renderRoute();
+                    this.loading = false;
+                  };
 
-                ref.on("value", liveCallback, (err) => {
-                  console.error(err);
-                  this.loading = false;
-                  this.setStatus(
-                    `ดึงข้อมูลไม่สำเร็จ: ${err.message || err}`,
-                    "error",
-                  );
+                  liveListeners.push({ ref, cb });
+
+                  ref.on("value", cb, (err) => {
+                    console.error(err);
+                    this.tracks[cfg.slot].status = "ดึงข้อมูลไม่สำเร็จ";
+                    this.tracks[cfg.slot].statusType = "error";
+                    this.setStatus(
+                      `ดึงข้อมูล ${cfg.vehicleId} ไม่สำเร็จ: ${err.message || err}`,
+                      "error",
+                    );
+                    this.loading = false;
+                  });
                 });
               } else {
-                const snapshot = await ref.orderByKey().once("value");
-                this.points = this.parseSnapshot(snapshot);
-                this.lastUpdatedAt = new Date().toLocaleString("th-TH");
+                const results = await Promise.all(
+                  configs.map(async (cfg) => {
+                    const snapshot = await firebaseDb
+                      .ref(`locations/${cfg.vehicleId}`)
+                      .orderByKey()
+                      .once("value");
+
+                    return {
+                      slot: cfg.slot,
+                      points: this.parseSnapshot(snapshot),
+                    };
+                  }),
+                );
+
+                results.forEach((r) => {
+                  this.setTrackData(r.slot, r.points);
+                });
+
                 this.renderRoute();
               }
             } catch (err) {
@@ -850,12 +1418,20 @@
           },
 
           clearTrack() {
-            this.points = [];
-            this.selectedIndex = -1;
-            this.lastUpdatedAt = null;
+            this.tracks.v1.points = [];
+            this.tracks.v1.lastUpdatedAt = null;
+            this.tracks.v1.status = "ยังไม่ได้โหลด";
+            this.tracks.v1.statusType = "info";
+
+            this.tracks.v2.points = [];
+            this.tracks.v2.lastUpdatedAt = null;
+            this.tracks.v2.status = "ยังไม่ได้โหลด";
+            this.tracks.v2.statusType = "info";
+
             this.detachLiveListener();
             this.resetMapLayers();
             this.setStatus("ล้างข้อมูลบนหน้าแล้ว", "info");
+
             if (mapInstance) {
               mapInstance.setView([13.736717, 100.523186], 6);
             }
@@ -874,7 +1450,7 @@
           this.resizeHandler = () => this.resizeMap();
           window.addEventListener("resize", this.resizeHandler);
 
-          this.loadTrack();
+          this.loadTracks();
         },
 
         beforeUnmount() {
