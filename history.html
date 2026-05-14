@@ -41,7 +41,7 @@
       }
 
       .app {
-        width: min(1400px, calc(100% - 24px));
+        width: min(1500px, calc(100% - 24px));
         margin: 0 auto;
         padding: 12px 0 28px;
       }
@@ -151,7 +151,7 @@
         gap: 8px;
       }
 
-      .field:first-child {
+      .field.full {
         grid-column: 1 / -1;
       }
 
@@ -178,6 +178,17 @@
       .field small {
         color: var(--muted);
         line-height: 1.5;
+      }
+
+      .two-cols {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .sub-field {
+        display: grid;
+        gap: 8px;
       }
 
       .pill-row {
@@ -234,7 +245,7 @@
 
       .page-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+        grid-template-columns: 1fr;
         gap: 14px;
         align-items: start;
       }
@@ -246,7 +257,7 @@
 
       #map {
         width: 100%;
-        height: clamp(360px, 62vh, 620px);
+        height: clamp(520px, 78vh, 920px);
         border-radius: 24px;
       }
 
@@ -399,24 +410,12 @@
       }
 
       @media (max-width: 980px) {
-        .page-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .right-card {
-          order: 2;
-        }
-
-        .map-wrap {
-          order: 1;
-        }
-
         .mini-grid {
           grid-template-columns: 1fr;
         }
 
         #map {
-          height: 420px;
+          height: 520px;
         }
 
         .table-wrap {
@@ -427,7 +426,7 @@
 
       @media (max-width: 720px) {
         .app {
-          width: min(100% - 16px, 1400px);
+          width: min(100% - 16px, 1500px);
           padding-top: 8px;
         }
 
@@ -447,8 +446,12 @@
           padding: 14px;
         }
 
-        .field:first-child {
+        .field.full {
           grid-column: auto;
+        }
+
+        .two-cols {
+          grid-template-columns: 1fr;
         }
 
         .actions {
@@ -456,7 +459,7 @@
         }
 
         #map {
-          height: 360px;
+          height: 430px;
           border-radius: 18px;
         }
 
@@ -521,24 +524,27 @@
       </div>
 
       <section class="card controls">
-        <div class="field">
-          <label>ทะเบียนรถ / Vehicle ID คันที่ 1</label>
-          <input
-            v-model.trim="vehicleId1"
-            placeholder="เช่น GPS_01"
-            @keyup.enter="loadTracks"
-          />
-          <small>ใช้รหัสเดียวกับหน้าส่ง GPS เดิม</small>
-        </div>
+        <div class="field full">
+          <label>ทะเบียนรถ / Vehicle ID</label>
+          <div class="two-cols">
+            <div class="sub-field">
+              <input
+                v-model.trim="vehicleId1"
+                placeholder="คันที่ 1 เช่น GPS_01"
+                @keyup.enter="loadTracks"
+              />
+              <small>ใช้รหัสเดียวกับหน้าส่ง GPS เดิม</small>
+            </div>
 
-        <div class="field">
-          <label>ทะเบียนรถ / Vehicle ID คันที่ 2</label>
-          <input
-            v-model.trim="vehicleId2"
-            placeholder="เช่น GPS_02 (ปล่อยว่างได้)"
-            @keyup.enter="loadTracks"
-          />
-          <small>ถ้าไม่กรอก จะดูแค่คันที่ 1</small>
+            <div class="sub-field">
+              <input
+                v-model.trim="vehicleId2"
+                placeholder="คันที่ 2 เช่น GPS_02 (ปล่อยว่างได้)"
+                @keyup.enter="loadTracks"
+              />
+              <small>ถ้าไม่กรอก จะดูแค่คันที่ 1</small>
+            </div>
+          </div>
         </div>
 
         <div class="field">
@@ -581,7 +587,7 @@
           >
         </div>
 
-        <div class="field">
+        <div class="field full">
           <label>การใช้งาน</label>
           <div class="actions">
             <button class="btn primary" @click="loadTracks" :disabled="loading">

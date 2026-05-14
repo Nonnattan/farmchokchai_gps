@@ -61,7 +61,7 @@ createApp({
       status: "พร้อมใช้งาน",
       statusType: "info",
 
-      vehicleId: "กข-1234",
+      vehicleId: "GPS_01",
       lastPayload: null,
       debugLines: []
     };
