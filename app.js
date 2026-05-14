@@ -6,6 +6,13 @@ let firebaseDb = null;
 // เก็บ Wake Lock sentinel ไว้นอก Vue
 let wakeLock = null;
 
+const currentPage = location.pathname.split("/").pop() || "index.html";
+document.querySelectorAll(".nav-link").forEach((link) => {
+  const href = link.getAttribute("href");
+  if (href === currentPage) {
+    link.classList.add("active");
+  }
+});
 function pad(n) {
   return String(Math.abs(n)).padStart(2, "0");
 }

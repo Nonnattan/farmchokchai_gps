@@ -1,0 +1,236 @@
+.site-nav {
+  position: sticky;
+  top: 12px;
+  z-index: 1000;
+  width: min(1500px, calc(100% - 24px));
+  margin: 12px auto 14px;
+  border-radius: 22px;
+  overflow: hidden;
+  background: rgba(11, 18, 32, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.site-nav__bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 62px;
+  padding: 10px 14px;
+}
+
+.site-nav__toggle {
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.95);
+  color: #e2e8f0;
+  border-radius: 14px;
+  font-size: 20px;
+  font-weight: 800;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+}
+
+.site-nav__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #f8fafc;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.site-nav__logo {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: rgba(37, 99, 235, 0.18);
+  font-size: 18px;
+  flex: 0 0 40px;
+}
+
+.site-nav__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.site-nav__title strong {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.site-nav__title span {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.2;
+  margin-top: 3px;
+}
+
+.site-nav__hint {
+  margin-left: auto;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.site-nav__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.46);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  z-index: 1090;
+}
+
+.site-nav__backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.site-nav__drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: min(86vw, 320px);
+  height: 100vh;
+  background: #0b1220;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 14px 0 36px rgba(0, 0, 0, 0.32);
+  transform: translateX(-102%);
+  transition: transform 0.24s ease;
+  z-index: 1100;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.site-nav__drawer.is-open {
+  transform: translateX(0);
+}
+
+.site-nav__drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 6px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.site-nav__drawer-logo {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: rgba(37, 99, 235, 0.18);
+  font-size: 18px;
+}
+
+.site-nav__drawer-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.site-nav__drawer-title strong {
+  color: #f8fafc;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.site-nav__drawer-title span {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.site-nav__links {
+  display: grid;
+  gap: 8px;
+}
+
+.site-nav__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  text-decoration: none;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  font-weight: 700;
+  transition: transform 0.16s ease, background 0.16s ease, color 0.16s ease;
+}
+
+.site-nav__link:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.14);
+  color: #fff;
+}
+
+.site-nav__link.is-active {
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.95), rgba(37, 99, 235, 0.96));
+  color: #fff;
+  border-color: transparent;
+}
+
+.site-nav__footer {
+  margin-top: auto;
+  padding: 10px 6px 2px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.nav-open {
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .site-nav {
+    width: calc(100% - 16px);
+    margin-top: 8px;
+    margin-bottom: 12px;
+  }
+
+  .site-nav__hint {
+    display: none;
+  }
+
+  .site-nav__bar {
+    padding: 10px 12px;
+  }
+
+  .site-nav__brand {
+    gap: 10px;
+  }
+
+  .site-nav__title strong {
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 900px) {
+  .site-nav__drawer {
+    width: 300px;
+  }
+}

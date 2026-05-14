@@ -6,12 +6,54 @@
     <meta name="theme-color" content="#0f172a" />
     <title>GPS Tracker Starter</title>
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="nav.css" />
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
   </head>
   <body>
-    <div id="app" class="app">
+    <nav class="site-nav">
+      <div class="site-nav__bar">
+        <button class="site-nav__toggle" type="button" aria-label="เปิดเมนู" aria-expanded="false" data-nav-toggle>
+          ☰
+        </button>
+
+        <a href="index.html" class="site-nav__brand">
+          <span class="site-nav__logo">🚚</span>
+          <span class="site-nav__title">
+            <strong>Farm Chokchai GPS</strong>
+            <span>Realtime & History</span>
+          </span>
+        </a>
+
+        <span class="site-nav__hint">กดเมนูด้านซ้าย</span>
+      </div>
+    </nav>
+
+    <div class="site-nav__backdrop" data-nav-backdrop></div>
+
+    <aside class="site-nav__drawer" data-nav-drawer>
+      <div class="site-nav__drawer-head">
+        <div class="site-nav__drawer-logo">🚚</div>
+        <div class="site-nav__drawer-title">
+          <strong>Farm Chokchai GPS</strong>
+          <span>เลือกหน้าได้จากเมนูนี้</span>
+        </div>
+      </div>
+
+      <div class="site-nav__links">
+        
+        <a href="index.html" class="site-nav__link">Home</a>
+        <a href="realtime.html" class="site-nav__link">Realtime</a>
+        <a href="history.html" class="site-nav__link">History</a>
+      </div>
+
+      <div class="site-nav__footer">
+        แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด
+      </div>
+    </aside>
+
+<div id="app" class="app">
       <header class="hero card">
         <div class="hero-badge">GPS Tracker</div>
         <h1>ติดตามตำแหน่งรถแบบเรียลไทม์</h1>
@@ -110,6 +152,7 @@
     </div>
 
     <script src="firebase-config.js"></script>
+    <script src="nav.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

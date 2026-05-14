@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>GPS Realtime Today</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="nav.css" />
+    <link rel="stylesheet" href="realtime.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <div class="site-nav__bar">
+        <button
+          class="site-nav__toggle"
+          type="button"
+          aria-label="เปิดเมนู"
+          aria-expanded="false"
+          data-nav-toggle
+        >
+          ☰
+        </button>
+
+        <a href="index.html" class="site-nav__brand">
+          <span class="site-nav__logo">🚚</span>
+          <span class="site-nav__title">
+            <strong>Farm Chokchai GPS</strong>
+            <span>Realtime & History</span>
+          </span>
+        </a>
+
+        <span class="site-nav__hint">กดเมนูด้านซ้าย</span>
+      </div>
+    </nav>
+
+    <div class="site-nav__backdrop" data-nav-backdrop></div>
+
+    <aside class="site-nav__drawer" data-nav-drawer>
+      <div class="site-nav__drawer-head">
+        <div class="site-nav__drawer-logo">🚚</div>
+        <div class="site-nav__drawer-title">
+          <strong>Farm Chokchai GPS</strong>
+          <span>เลือกหน้าได้จากเมนูนี้</span>
+        </div>
+      </div>
+
+      <div class="site-nav__links">
+        <a href="index.html" class="site-nav__link">Home</a>
+        <a href="realtime.html" class="site-nav__link">Realtime</a>
+        <a href="history.html" class="site-nav__link">History</a>
+      </div>
+
+      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
+    </aside>
+
+    <div id="app" class="app">
+      <header class="hero card">
+        <div class="hero-badge">GPS Realtime Today</div>
+        <h1>รถวิ่งของวันนี้ทุกคันแบบเรียลไทม์</h1>
+        <p class="subtitle">
+          แสดงตำแหน่งรถทุกคันของวันนี้จาก Firebase แบบสด พร้อมเส้นทาง, จุดล่าสุด
+          และตารางข้อมูล
+        </p>
+      </header>
+
+      <div class="topbar">
+        <a href="history.html" class="btn secondary">ดูเส้นทางย้อนหลัง</a>
+        <button
+          class="btn primary"
+          @click="subscribeTodayLive"
+          :disabled="loading"
+        >
+          {{ loading ? 'กำลังโหลด...' : 'รีเฟรชข้อมูลสด' }}
+        </button>
+        <button
+          class="btn secondary"
+          @click="fitToRoute"
+          :disabled="!visiblePoints.length"
+        >
+          จัดขอบแผนที่
+        </button>
+      </div>
+
+      <section class="card controls">
+        <div class="field full">
+          <label>รถวิ่งวันนี้</label>
+          <small>
+            หน้าใช้งานนี้จะติดตามข้อมูลรถของวันนี้ทุกคันแบบเรียลไทม์จาก path
+            <strong>locations</strong> ใน Firebase
+          </small>
+        </div>
+
+        <div class="field full">
+          <label>ตัวกรองรถ</label>
+          <div class="pill-row">
+            <button
+              class="btn secondary"
+              type="button"
+              @click="toggleAllVehicles(true)"
+            >
+              แสดงทั้งหมด
+            </button>
+            <button
+              class="btn secondary"
+              type="button"
+              @click="toggleAllVehicles(false)"
+            >
+              ซ่อนทั้งหมด
+            </button>
+          </div>
+        </div>
+
+        <div class="field full">
+          <div class="pill-row">
+            <label
+              v-for="vehicle in vehicleSummaries"
+              :key="vehicle.vehicleId"
+              class="pill"
+            >
+              <input
+                type="checkbox"
+                v-model="visibleVehicles[vehicle.vehicleId]"
+              />
+              <span class="legend-vehicle">
+                <span
+                  class="legend-swatch"
+                  :style="{ background: vehicle.color }"
+                ></span>
+                {{ vehicle.vehicleId }}
+              </span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="mini-grid">
+        <div class="mini-stat">
+          <span>รถที่แสดง</span>
+          <strong>{{ totalVehiclesText }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>จุดวันนี้</span>
+          <strong>{{ totalPointsText }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>อัปเดตล่าสุด</span>
+          <strong>{{ lastUpdatedText }}</strong>
+        </div>
+      </section>
+
+      <section class="page-grid">
+        <section class="card map-wrap">
+          <div id="map"></div>
+        </section>
+
+        <section class="card right-card">
+          <h2 style="margin-top: 0">สรุปวันนี้</h2>
+
+          <div class="track-cards">
+            <article
+              v-for="vehicle in visibleVehicleSummaries"
+              :key="vehicle.vehicleId"
+              class="track-card"
+            >
+              <div class="track-head">
+                <span
+                  class="track-dot"
+                  :style="{ background: vehicle.color }"
+                ></span>
+                <div>
+                  <div class="track-title">{{ vehicle.vehicleId }}</div>
+                  <div class="track-sub">
+                    อัปเดตล่าสุด: {{ vehicle.lastSeenAt || '-' }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="pill-row">
+                <span class="pill">จุด: {{ vehicle.pointCount }}</span>
+                <span class="pill">ช่วงเส้น: {{ vehicle.segmentCount }}</span>
+                <span class="pill"
+                  >ระยะทาง: {{ vehicle.distanceKm.toFixed(2) }} km</span
+                >
+              </div>
+
+              <div class="track-sub" style="margin-top: 10px">
+                ล่าสุด: {{ vehicle.latestText }}<br />
+                Lat: {{ vehicle.latestLat }}<br />
+                Lng: {{ vehicle.latestLng }}<br />
+                Speed: {{ vehicle.latestSpeed }}<br />
+                Acc: {{ vehicle.latestAccuracy }}
+              </div>
+
+              <div
+                style="
+                  margin-top: 10px;
+                  display: flex;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                "
+              >
+                <button
+                  class="btn secondary"
+                  type="button"
+                  @click="focusPoint(vehicle.latest)"
+                  :disabled="!vehicle.latest"
+                >
+                  ดูจุดล่าสุด
+                </button>
+              </div>
+            </article>
+
+            <article v-if="!visibleVehicleSummaries.length" class="track-card">
+              <div class="track-sub">ยังไม่มีรถที่เลือกให้แสดง</div>
+            </article>
+          </div>
+
+          <p class="status" :class="statusType">{{ status }}</p>
+          <p class="small-note">
+            แผนที่และตารางด้านล่างจะอัปเดตตามข้อมูลล่าสุดจาก Firebase
+            โดยอัตโนมัติ และแสดงเฉพาะข้อมูลของวันนี้
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>รถ</th>
+                  <th>เวลา</th>
+                  <th>Lat</th>
+                  <th>Lng</th>
+                  <th>Speed</th>
+                  <th>Acc</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(p, idx) in visiblePoints"
+                  :key="p.vehicleId + '-' + p.key"
+                >
+                  <td>{{ idx + 1 }}</td>
+                  <td>
+                    <span
+                      class="pill"
+                      style="padding: 5px 9px; font-size: 12px"
+                    >
+                      <span
+                        class="legend-swatch"
+                        :style="{ background: p.color }"
+                      ></span>
+                      {{ p.vehicleId }}
+                    </span>
+                  </td>
+                  <td>{{ p.timestampiso }}</td>
+                  <td>{{ formatCoord(p.lat) }}</td>
+                  <td>{{ formatCoord(p.lng) }}</td>
+                  <td>{{ formatSpeed(p.speed) }}</td>
+                  <td>{{ formatAccuracy(p.accuracy) }}</td>
+                  <td>
+                    <button class="row-btn" @click="focusPoint(p)">ดู</button>
+                  </td>
+                </tr>
+                <tr v-if="!visiblePoints.length">
+                  <td
+                    colspan="8"
+                    style="
+                      text-align: center;
+                      padding: 22px;
+                      color: var(--muted);
+                    "
+                  >
+                    ยังไม่มีข้อมูลวันนี้
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <script src="firebase-config.js"></script>
+    <script src="nav.js"></script>
+    <script src="realtime.js"></script>
+  </body>
+</html>
