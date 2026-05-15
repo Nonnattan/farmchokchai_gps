@@ -203,7 +203,7 @@ createApp({
       rows.sort((a, b) => {
         const ta = a.date ? a.date.getTime() : 0;
         const tb = b.date ? b.date.getTime() : 0;
-        return ta - tb;
+        return tb - ta;
       });
 
       return rows;
@@ -429,7 +429,7 @@ createApp({
       items.sort((a, b) => {
         const ta = a.date ? a.date.getTime() : 0;
         const tb = b.date ? b.date.getTime() : 0;
-        return ta - tb;
+        return tb - ta;
       });
 
       return items;

@@ -73,7 +73,13 @@ function getTodayBounds() {
   start.setHours(0, 0, 0, 0);
   const end = new Date();
   end.setHours(23, 59, 59, 999);
-  return { start, end };
+  entries.sort((a, b) => {
+        const ta = a.latest?.date ? new Date(a.latest.date).getTime() : 0;
+        const tb = b.latest?.date ? new Date(b.latest.date).getTime() : 0;
+        return tb - ta;
+      });
+
+      return { start, end };
 }
 
 createApp({
