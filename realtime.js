@@ -8,18 +8,9 @@ let liveRef = null;
 let liveCallback = null;
 
 const COLORS = [
-  "#38bdf8",
-  "#f59e0b",
-  "#22c55e",
-  "#a855f7",
-  "#ef4444",
-  "#14b8a6",
-  "#eab308",
-  "#f97316",
-  "#06b6d4",
-  "#8b5cf6",
-  "#84cc16",
-  "#ec4899",
+  "#38bdf8", "#f59e0b", "#22c55e", "#a855f7",
+  "#ef4444", "#14b8a6", "#eab308", "#f97316",
+  "#06b6d4", "#8b5cf6", "#84cc16", "#ec4899",
 ];
 
 function formatNum(n, digits = 6) {
@@ -31,6 +22,26 @@ function formatInt(n) {
 }
 
 function toDateSafe(value) {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.toDate === "function") {
+      const d = value.toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+    }
+    if (typeof value.seconds === "number") {
+      const ms =
+        value.seconds * 1000 +
+        (typeof value.nanoseconds === "number" ? value.nanoseconds / 1e6 : 0);
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -46,18 +57,8 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function escapeCsv(value) {
-  const s = String(value ?? "");
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
 function pad(n) {
   return String(Math.abs(n)).padStart(2, "0");
-}
-
-function getTodayKey(date = new Date()) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function colorForId(vehicleId) {
@@ -73,13 +74,7 @@ function getTodayBounds() {
   start.setHours(0, 0, 0, 0);
   const end = new Date();
   end.setHours(23, 59, 59, 999);
-  entries.sort((a, b) => {
-        const ta = a.latest?.date ? new Date(a.latest.date).getTime() : 0;
-        const tb = b.latest?.date ? new Date(b.latest.date).getTime() : 0;
-        return tb - ta;
-      });
-
-      return { start, end };
+  return { start, end };
 }
 
 createApp({
@@ -88,12 +83,18 @@ createApp({
       loading: false,
       status: "กำลังรอข้อมูลรถวันนี้...",
       statusType: "info",
-      todayKey: getTodayKey(),
       gapMinutesInput: "10",
       vehiclesById: {},
       visibleVehicles: {},
       lastRefreshAt: null,
       mapReady: false,
+      resizeHandler: null,
+
+      // ตัวกรองในตาราง
+      filterVehicle: "",
+      filterStartTime: "",
+      filterEndTime: "",
+      filterHourSlot: "",
     };
   },
   computed: {
@@ -104,6 +105,7 @@ createApp({
     gapThresholdMs() {
       return this.gapThresholdMinutes * 60 * 1000;
     },
+
     vehicleSummaries() {
       const entries = Object.entries(this.vehiclesById).map(([vehicleId, data]) => {
         const color = colorForId(vehicleId);
@@ -111,24 +113,31 @@ createApp({
         const segments = this.buildSegments(points);
         const distanceKm = this.distanceKmFromSegments(segments);
         const latest = points[points.length - 1] || null;
+        const latestTime = latest?.date ? latest.date.getTime() : 0;
+
         return {
           vehicleId,
           color,
           points,
           segments,
           distanceKm,
+          distanceText: `${distanceKm.toFixed(2)} km`,
           pointCount: points.length,
           segmentCount: segments.filter((s) => s.length >= 2).length,
           latest,
-          latestText: latest?.timestampiso || "-",
-          latestLat: latest ? formatNum(latest.lat, 6) : "-",
-          latestLng: latest ? formatNum(latest.lng, 6) : "-",
-          latestSpeed: latest ? this.formatSpeed(latest.speed) : "-",
-          latestAccuracy: latest ? this.formatAccuracy(latest.accuracy) : "-",
+          latestTime,
+          lastUpdatedAt: data.lastSeenAt || null,
           lastSeenAt: data.lastSeenAt || null,
         };
       });
-      entries.sort((a, b) => a.vehicleId.localeCompare(b.vehicleId, "th"));
+
+      entries.sort((a, b) => {
+        const ta = a.latestTime || 0;
+        const tb = b.latestTime || 0;
+        if (tb !== ta) return tb - ta;
+        return a.vehicleId.localeCompare(b.vehicleId, "th");
+      });
+
       return entries;
     },
     visibleVehicleSummaries() {
@@ -137,21 +146,48 @@ createApp({
     visiblePoints() {
       const rows = [];
       for (const vehicle of this.visibleVehicleSummaries) {
-        vehicle.points.forEach((p, idx) => {
+        vehicle.points.forEach((p) => {
           rows.push({
             ...p,
             vehicleId: vehicle.vehicleId,
             color: vehicle.color,
-            indexInTrack: idx,
           });
         });
       }
+
       rows.sort((a, b) => {
         const ta = a.date ? a.date.getTime() : 0;
         const tb = b.date ? b.date.getTime() : 0;
-        return ta - tb;
+        if (tb !== ta) return tb - ta;
+        return String(a.vehicleId || "").localeCompare(String(b.vehicleId || ""), "th");
       });
+
       return rows;
+    },
+    filteredPoints() {
+      return this.visiblePoints.filter((p) => {
+        if (this.filterVehicle && p.vehicleId !== this.filterVehicle) {
+          return false;
+        }
+
+        if (this.filterHourSlot !== "" && p.date) {
+          const slot = Number(this.filterHourSlot);
+          if (Number.isFinite(slot)) {
+            if (p.date.getHours() !== slot) return false;
+          }
+        }
+
+        if (p.date && (this.filterStartTime || this.filterEndTime)) {
+          const hours = pad(p.date.getHours());
+          const mins = pad(p.date.getMinutes());
+          const timeStr = `${hours}:${mins}`;
+
+          if (this.filterStartTime && timeStr < this.filterStartTime) return false;
+          if (this.filterEndTime && timeStr > this.filterEndTime) return false;
+        }
+
+        return true;
+      });
     },
     totalVehiclesText() {
       return String(this.visibleVehicleSummaries.length);
@@ -160,9 +196,15 @@ createApp({
       return String(this.visiblePoints.length);
     },
     lastUpdatedText() {
-      const times = this.vehicleSummaries.map((v) => v.lastSeenAt).filter(Boolean);
+      const times = this.vehicleSummaries
+        .map((v) => v.lastSeenAt)
+        .filter(Boolean)
+        .map((t) => toDateSafe(t))
+        .filter(Boolean)
+        .map((d) => d.getTime());
+
       if (!times.length) return "-";
-      return times.sort().slice(-1)[0];
+      return this.formatDateTime(new Date(Math.max(...times)));
     },
   },
   watch: {
@@ -177,9 +219,20 @@ createApp({
     },
   },
   methods: {
+    // ให้ template เรียก pad() ได้
+    pad(n) {
+      return pad(n);
+    },
     setStatus(text, type = "info") {
       this.status = text;
       this.statusType = type;
+    },
+    formatDateTime(value) {
+      const d = toDateSafe(value);
+      if (!d) return "-";
+      return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
+        d.getHours(),
+      )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     },
     formatCoord(value) {
       return formatNum(value, 6);
@@ -194,11 +247,7 @@ createApp({
         : "-";
     },
     initFirebase() {
-      if (
-        !window.firebaseConfig ||
-        !window.firebaseConfig.apiKey ||
-        window.firebaseConfig.apiKey === "YOUR_API_KEY"
-      ) {
+      if (!window.firebaseConfig || !window.firebaseConfig.apiKey) {
         this.setStatus("ยังไม่ตั้งค่า Firebase config", "warn");
         return false;
       }
@@ -214,11 +263,15 @@ createApp({
     },
     initMap() {
       if (mapInstance) return;
+
       mapInstance = L.map("map", { zoomControl: true }).setView([13.736717, 100.523186], 6);
+
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
         maxZoom: 19,
       }).addTo(mapInstance);
+
       this.mapReady = true;
       setTimeout(() => mapInstance.invalidateSize(), 100);
     },
@@ -232,8 +285,10 @@ createApp({
     buildSegments(points) {
       const pts = points || [];
       if (!pts.length) return [];
+
       const segments = [];
       let current = [pts[0]];
+
       for (let i = 1; i < pts.length; i += 1) {
         const prev = pts[i - 1];
         const curr = pts[i];
@@ -243,6 +298,7 @@ createApp({
           prevTime !== null &&
           currTime !== null &&
           currTime - prevTime > this.gapThresholdMs;
+
         if (isGap) {
           if (current.length) segments.push(current);
           current = [curr];
@@ -250,6 +306,7 @@ createApp({
           current.push(curr);
         }
       }
+
       if (current.length) segments.push(current);
       return segments;
     },
@@ -266,16 +323,20 @@ createApp({
     },
     parseVehicleSnapshot(vehicleSnapshot) {
       const points = [];
+      const { start, end } = getTodayBounds();
+
       vehicleSnapshot.forEach((child) => {
         const value = child.val() || {};
         const lat = Number(value.lat);
         const lng = Number(value.lng);
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
         const timestampiso = String(value.timestampiso || child.key || "");
         const date = toDateSafe(timestampiso);
         if (!date) return;
-        const { start, end } = getTodayBounds();
+
         if (date < start || date > end) return;
+
         points.push({
           key: child.key,
           lat,
@@ -285,13 +346,27 @@ createApp({
           timestampiso,
           date,
           raw: value,
+          pointNo: 0,
+          segmentMeters: 0,
         });
       });
+
       points.sort((a, b) => {
         const ta = a.date ? a.date.getTime() : 0;
         const tb = b.date ? b.date.getTime() : 0;
         return ta - tb;
       });
+
+      points.forEach((p, idx) => {
+        p.pointNo = idx + 1;
+        if (idx === 0) {
+          p.segmentMeters = 0;
+        } else {
+          const prev = points[idx - 1];
+          p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+        }
+      });
+
       return points;
     },
     detachLiveListener() {
@@ -307,6 +382,7 @@ createApp({
     },
     subscribeTodayLive() {
       if (!this.initFirebase()) return;
+
       this.loading = true;
       this.setStatus("กำลังโหลดรถวิ่งของวันนี้...", "info");
       this.detachLiveListener();
@@ -323,9 +399,10 @@ createApp({
           const points = this.parseVehicleSnapshot(vehicleNode);
           if (!points.length) return;
 
+          const latest = points[points.length - 1];
           result[vehicleId] = {
             points,
-            lastSeenAt: new Date().toLocaleString("th-TH"),
+            lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
           };
           visibleIds.add(vehicleId);
         });
@@ -340,7 +417,7 @@ createApp({
           if (!(vehicleId in this.visibleVehicles)) this.visibleVehicles[vehicleId] = true;
         });
 
-        this.lastRefreshAt = new Date().toLocaleString("th-TH");
+        this.lastRefreshAt = new Date().toISOString();
         this.renderRoute();
         this.loading = false;
 
@@ -363,18 +440,13 @@ createApp({
     },
     renderRoute() {
       this.resetMapLayers();
-
       if (!mapInstance) this.initMap();
 
       const summaries = this.visibleVehicleSummaries;
       const totalPoints = summaries.reduce((sum, v) => sum + v.points.length, 0);
 
-      if (!totalPoints) {
-        this.setStatus("ไม่พบรถวิ่งของวันนี้ในตอนนี้", "warn");
-        return;
-      }
+      if (!totalPoints) return;
 
-      let polyCount = 0;
       summaries.forEach((vehicle) => {
         const pts = vehicle.points;
         const segments = vehicle.segments;
@@ -393,7 +465,10 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>${p.timestampiso}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}<br>Acc ${this.formatAccuracy(p.accuracy)}`,
+              `<strong>${vehicle.vehicleId}</strong><br>${this.formatDateTime(p.timestampiso)}<br>Lat ${formatNum(
+                p.lat,
+                6,
+              )}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
             );
           pointLayers.push(marker);
           return;
@@ -401,10 +476,9 @@ createApp({
 
         segments.forEach((segment, segIndex) => {
           if (!segment.length) return;
-          if (segment.length >= 2) {
-            polyCount += 1;
-            const latlngs = segment.map((p) => [p.lat, p.lng]);
 
+          if (segment.length >= 2) {
+            const latlngs = segment.map((p) => [p.lat, p.lng]);
             const polyline = L.polyline(latlngs, {
               color,
               weight: 5,
@@ -412,7 +486,6 @@ createApp({
               lineCap: "round",
               lineJoin: "round",
             }).addTo(mapInstance);
-
             routeLayers.push(polyline);
           }
 
@@ -428,7 +501,9 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1}<br>${start.timestampiso}`,
+              `<strong>${vehicle.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1}<br>${this.formatDateTime(
+                start.timestampiso,
+              )}`,
             );
 
           const endMarker = L.circleMarker([end.lat, end.lng], {
@@ -440,14 +515,15 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1}<br>${end.timestampiso}`,
+              `<strong>${vehicle.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1}<br>${this.formatDateTime(
+                end.timestampiso,
+              )}`,
             );
 
           pointLayers.push(startMarker, endMarker);
 
           segment.forEach((p, idx) => {
             if (idx === 0 || idx === segment.length - 1) return;
-
             const marker = L.circleMarker([p.lat, p.lng], {
               radius: 5,
               color: "#e2e8f0",
@@ -457,22 +533,16 @@ createApp({
             })
               .addTo(mapInstance)
               .bindPopup(
-                `<strong>${vehicle.vehicleId}</strong><br>${p.timestampiso}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}<br>Acc ${this.formatAccuracy(p.accuracy)}`,
+                `<strong>${vehicle.vehicleId}</strong><br>${this.formatDateTime(
+                  p.timestampiso,
+                )}<br>Speed ${this.formatSpeed(p.speed)}`,
               );
-
             pointLayers.push(marker);
           });
         });
       });
 
       this.fitToRoute();
-
-      if (polyCount === 0) {
-        this.setStatus("พบข้อมูล แต่มีจุดเดี่ยว ยังไม่มีเส้นให้วาด", "warn");
-        return;
-      }
-
-      this.setStatus(`แสดงรถวันนี้ ${summaries.length} คัน รวม ${totalPoints} จุด`, "ok");
     },
     fitToRoute() {
       if (!mapInstance || !this.visiblePoints.length) return;
@@ -486,11 +556,15 @@ createApp({
       const popup = L.popup()
         .setLatLng([row.lat, row.lng])
         .setContent(
-          `<strong>${row.vehicleId}</strong><br/><strong>${row.timestampiso}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(row.lng, 6)}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>Acc: ${this.formatAccuracy(row.accuracy)}`,
+          `<strong>${row.vehicleId}</strong><br/><strong>${this.formatDateTime(
+            row.timestampiso,
+          )}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(
+            row.lng,
+            6,
+          )}<br/>Speed: ${this.formatSpeed(row.speed)}`,
         );
       popup.openOn(mapInstance);
     },
-
     resizeMap() {
       if (mapInstance) setTimeout(() => mapInstance.invalidateSize(), 50);
     },

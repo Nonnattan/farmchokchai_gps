@@ -3,12 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#f3f6fb" />
     <title>GPS History + Polyline</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="nav.css" />
     <link rel="stylesheet" href="history.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
@@ -17,7 +20,13 @@
   <body>
     <nav class="site-nav">
       <div class="site-nav__bar">
-        <button class="site-nav__toggle" type="button" aria-label="เปิดเมนู" aria-expanded="false" data-nav-toggle>
+        <button
+          class="site-nav__toggle"
+          type="button"
+          aria-label="เปิดเมนู"
+          aria-expanded="false"
+          data-nav-toggle
+        >
           ☰
         </button>
 
@@ -45,72 +54,167 @@
       </div>
 
       <div class="site-nav__links">
-        
         <a href="index.html" class="site-nav__link">Home</a>
         <a href="realtime.html" class="site-nav__link">Realtime</a>
         <a href="history.html" class="site-nav__link">History</a>
       </div>
 
-      <div class="site-nav__footer">
-        แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด
-      </div>
+      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
     </aside>
 
-<div id="app" class="app">
+    <div id="app" class="app">
       <header class="hero card">
         <div class="hero-badge">GPS History + Polyline</div>
-        <h1>หน้าแสดงข้อมูลย้อนหลังและวาดเส้นทาง 2 คัน</h1>
-        <p class="subtitle">
-          แสดงข้อมูลย้อนหลังแบบอัตโนมัติจาก Vehicle ID ที่กรอกไว้ ใช้ Leaflet + OpenStreetMap และ Firebase Realtime Database
-        </p>
+        <h1>หน้าแสดงข้อมูลย้อนหลังและวาดเส้นทาง 4 คัน</h1>
+        <p class="subtitle">แสดงข้อมูลย้อนหลังแบบอัตโนมัติ</p>
       </header>
-
-      <div class="topbar">
-        <a href="index.html" class="btn secondary">ย้อนกลับ</a>
-      </div>
 
       <section class="card controls">
         <div class="field full">
-          <label>ทะเบียนรถ / Vehicle ID</label>
-          <div class="two-cols">
+          <label>เลือก device จาก Firebase</label>
+
+          <div class="device-grid">
             <div class="sub-field">
-              <input v-model.trim="vehicleId1" placeholder="คันที่ 1 เช่น GPS_01" @keyup.enter="loadTracks" />
-              <small>ใช้รหัสเดียวกับหน้าส่ง GPS เดิม</small>
+              <select
+                v-model="vehicleId1"
+                class="select-input"
+                required
+                @change="loadTracks"
+              >
+                <option disabled value="">เลือก device คันที่ 1</option>
+                <option v-if="!deviceOptions.length" disabled value="">
+                  กำลังอ่าน device...
+                </option>
+                <option
+                  v-for="device in deviceOptions"
+                  :key="'d1-' + device"
+                  :value="device"
+                >
+                  {{ device }}
+                </option>
+              </select>
+              <small
+                >ใช้ข้อมูลจาก path
+                <strong>locations/&lt;device&gt;</strong></small
+              >
             </div>
 
             <div class="sub-field">
-              <input v-model.trim="vehicleId2" placeholder="คันที่ 2 เช่น GPS_02 (ปล่อยว่างได้)" @keyup.enter="loadTracks" />
-              <small>ถ้าไม่กรอก จะดูแค่คันที่ 1</small>
+              <select
+                v-model="vehicleId2"
+                class="select-input"
+                @change="loadTracks"
+              >
+                <option value="">ไม่เลือกคันที่ 2</option>
+                <option
+                  v-for="device in deviceOptions"
+                  :key="'d2-' + device"
+                  :value="device"
+                >
+                  {{ device }}
+                </option>
+              </select>
+              <small>เลือก device คันที่ 2</small>
+            </div>
+
+            <div class="sub-field">
+              <select
+                v-model="vehicleId3"
+                class="select-input"
+                @change="loadTracks"
+              >
+                <option value="">ไม่เลือกคันที่ 3</option>
+                <option
+                  v-for="device in deviceOptions"
+                  :key="'d3-' + device"
+                  :value="device"
+                >
+                  {{ device }}
+                </option>
+              </select>
+              <small>เลือก device คันที่ 3</small>
+            </div>
+
+            <div class="sub-field">
+              <select
+                v-model="vehicleId4"
+                class="select-input"
+                @change="loadTracks"
+              >
+                <option value="">ไม่เลือกคันที่ 4</option>
+                <option
+                  v-for="device in deviceOptions"
+                  :key="'d4-' + device"
+                  :value="device"
+                >
+                  {{ device }}
+                </option>
+              </select>
+              <small>เลือก device คันที่ 4</small>
             </div>
           </div>
         </div>
 
-        <div class="field">
-          <label>วันที่เริ่มต้น</label>
-          <input v-model="fromDate" type="date" />
-        </div>
+        <div class="two-cols">
+          <div class="field">
+            <label>วันที่เริ่มต้น</label>
+            <input
+              v-model="fromDate"
+              type="date"
+              required
+              class="date-input"
+              :max="toDate || fromDate"
+            />
+          </div>
 
-        <div class="field">
-          <label>วันที่สิ้นสุด</label>
-          <input v-model="toDate" type="date" />
+          <div class="field">
+            <label>วันที่สิ้นสุด</label>
+            <input
+              v-model="toDate"
+              type="date"
+              required
+              class="date-input"
+              :min="fromDate || toDate"
+            />
+          </div>
         </div>
 
         <div class="field">
           <label>ตัดเส้นเมื่อห่างกันเกิน (นาที)</label>
-          <input v-model="gapMinutesInput" inputmode="numeric" placeholder="เช่น 10" />
-          <small>ถ้าข้อมูลห่างกันเกินค่านี้ ระบบจะแยกเป็นอีกเส้น ไม่ลากข้ามช่องว่าง</small>
+          <input
+            v-model="gapMinutesInput"
+            inputmode="numeric"
+            placeholder="เช่น 1"
+            class="text-input"
+          />
+          <small
+            >ถ้าข้อมูลห่างกันเกินค่านี้ ระบบจะแยกเป็นอีกเส้น
+            ไม่ลากข้ามช่องว่าง</small
+          >
         </div>
 
         <div class="field full">
           <label>การใช้งาน</label>
           <div class="actions">
-            <button class="btn primary" @click="loadTracks" :disabled="loading">
-              {{ loading ? 'กำลังโหลด...' : 'โหลดข้อมูล' }}
+            <button
+              class="btn primary"
+              @click="loadTracks"
+              :disabled="loading || deviceLoading"
+            >
+              {{ loading ? 'กำลังโหลด...' : (deviceLoading ? 'กำลังอ่าน device...' : 'โหลดข้อมูล') }}
             </button>
-            <button class="btn secondary" @click="fitToRoute" :disabled="!visibleAllFilteredPoints.length">
+            <button
+              class="btn secondary"
+              @click="fitToRoute"
+              :disabled="!visibleAllFilteredPoints.length"
+            >
               จัดขอบแผนที่
             </button>
-            <button class="btn secondary" @click="exportCsv" :disabled="!visibleAllFilteredPoints.length">
+            <button
+              class="btn secondary"
+              @click="exportCsv"
+              :disabled="!visibleAllFilteredPoints.length"
+            >
               Export CSV
             </button>
             <button class="btn danger" @click="clearTrack">ล้างข้อมูล</button>
@@ -133,122 +237,226 @@
         </div>
       </section>
 
-      <section class="page-grid">
-        <section class="card right-card">
-          <h2 style="margin-top: 0">ตัวกรองรถ</h2>
+      <section class="card filter-card">
+        <h2 style="margin-top: 0">ตัวกรองรถ</h2>
 
-          <div class="pill-row" style="margin-bottom: 12px">
-            <label class="pill">
-              <input type="checkbox" v-model="showVehicle1" @change="renderRoute" />
-              แสดงคันที่ 1 — {{ vehicleId1 || '-' }}
-            </label>
+        <div class="pill-row">
+          <label v-if="vehicleId1" class="pill">
+            <input
+              type="checkbox"
+              v-model="showVehicle1"
+              @change="renderRoute"
+            />
+            แสดงคันที่ 1 — {{ vehicleId1 }}
+          </label>
 
-            <label v-if="vehicleId2.trim()" class="pill">
-              <input type="checkbox" v-model="showVehicle2" @change="renderRoute" />
-              แสดงคันที่ 2 — {{ vehicleId2 || '-' }}
-            </label>
+          <label v-if="vehicleId2" class="pill">
+            <input
+              type="checkbox"
+              v-model="showVehicle2"
+              @change="renderRoute"
+            />
+            แสดงคันที่ 2 — {{ vehicleId2 }}
+          </label>
 
-            <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
-            <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
-          </div>
-        </section>
+          <label v-if="vehicleId3" class="pill">
+            <input
+              type="checkbox"
+              v-model="showVehicle3"
+              @change="renderRoute"
+            />
+            แสดงคันที่ 3 — {{ vehicleId3 }}
+          </label>
 
-        <section class="card map-wrap">
-          <div id="map"></div>
-        </section>
+          <label v-if="vehicleId4" class="pill">
+            <input
+              type="checkbox"
+              v-model="showVehicle4"
+              @change="renderRoute"
+            />
+            แสดงคันที่ 4 — {{ vehicleId4 }}
+          </label>
 
-        <section class="card right-card">
-          <h2 style="margin-top: 0">สรุปเส้นทาง</h2>
+          <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
+          <span class="pill">Gap: {{ gapThresholdMinutes }} นาที</span>
+        </div>
+      </section>
 
-          <div class="split-info">
-            <div class="pill-row">
-              <span v-for="track in trackSummaries" :key="track.slot" class="pill">
-                <span class="track-dot" :style="{ background: track.color, width: '10px', height: '10px' }"></span>
-                {{ track.label }}: {{ track.vehicleId }}
-              </span>
-            </div>
-          </div>
+      <section class="card map-wrap">
+        <div id="map"></div>
+      </section>
 
-          <div class="track-cards">
-            <article v-for="track in trackSummaries" :key="track.slot" class="track-card">
-              <div class="track-head">
-                <span class="track-dot" :style="{ background: track.color }"></span>
-                <div>
-                  <div class="track-title">{{ track.label }} — {{ track.vehicleId }}</div>
-                  <div class="track-sub">อัปเดตล่าสุด: {{ track.lastUpdatedAt || '-' }}</div>
+      <section class="vehicle-summary-list">
+        <article
+          v-for="track in trackSummaries"
+          :key="track.slot"
+          class="card track-card"
+        >
+          <div class="track-head">
+            <div class="track-head__left">
+              <span
+                class="track-dot"
+                :style="{ background: track.color }"
+              ></span>
+              <div>
+                <div class="track-title">
+                  {{ track.label }} — {{ track.vehicleId }}
                 </div>
               </div>
-
-              <div class="pill-row">
-                <span class="pill">จุด: {{ track.pointCount }}</span>
-                <span class="pill">ช่วงเส้น: {{ track.segmentCount }}</span>
-                <span class="pill">ระยะทาง: {{ track.distanceText }}</span>
-              </div>
-
-              <div class="track-sub" style="margin-top: 10px">
-                เริ่ม: {{ track.firstText }}<br />
-                จบ: {{ track.lastText }}<br />
-                สถานะ: {{ track.status }}
-              </div>
-            </article>
-          </div>
-
-          <p class="status" :class="statusType">{{ status }}</p>
-
-          <div style="display: flex; justify-content: space-between; margin-top: 10px; gap: 12px; flex-wrap: wrap">
-            <p class="small-note">
-              ระบบจะเรียงข้อมูลตามเวลา และแยกเป็นช่วงถ้าห่างกันเกินค่าที่กำหนด ดังนั้นข้อมูลคนละวันหรือคนละรอบจะไม่ถูกลากเชื่อมมั่ว ๆ
-            </p>
-
-            <div style="display: flex; justify-content: flex-end; margin-top: 10px; width: 100%">
-              <button class="btn secondary" @click="exportCsv" :disabled="!visibleAllFilteredPoints.length">
-                Export CSV
+              <button
+                class="btn secondary"
+                type="button"
+                @click="focusPoint(track.latest)"
+                :disabled="!track.latest"
+              >
+                ดูจุดล่าสุด
               </button>
             </div>
           </div>
 
-          <div v-if="showTable" class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>รถ</th>
-                  <th>เวลา</th>
-                  <th>Lat</th>
-                  <th>Lng</th>
-                  <th>Speed</th>
-                  <th>Acc</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(p, idx) in visibleAllFilteredPoints" :key="p.key">
-                  <td>{{ idx + 1 }}</td>
-                  <td>
-                    <span class="pill" style="padding: 5px 9px; font-size: 12px" :style="{ borderColor: p.color }">
-                      <span class="track-dot" :style="{ background: p.color, width: '10px', height: '10px' }"></span>
-                      {{ p.label }}
-                    </span>
-                  </td>
-                  <td>{{ p.timestampiso }}</td>
-                  <td>{{ formatCoord(p.lat) }}</td>
-                  <td>{{ formatCoord(p.lng) }}</td>
-                  <td>{{ formatSpeed(p.speed) }}</td>
-                  <td>{{ formatAccuracy(p.accuracy) }}</td>
-                  <td><button class="row-btn" @click="focusPoint(p)">ดู</button></td>
-                </tr>
-                <tr v-if="!visibleAllFilteredPoints.length">
-                  <td colspan="8" style="text-align: center; padding: 22px; color: var(--muted)">ยังไม่มีข้อมูล</td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="track-sub">
+            อัปเดตล่าสุด: {{ track.lastUpdatedAt ?
+            formatDateTime(track.lastUpdatedAt) : '-' }}
           </div>
-        </section>
+
+          <div class="metric-row">
+            <span class="metric-pill">จุด: {{ track.pointCount }}</span>
+            <span class="metric-pill">ช่วงเส้น: {{ track.segmentCount }}</span>
+            <span class="metric-pill">ระยะทาง: {{ track.distanceText }}</span>
+          </div>
+
+          <div class="track-sub" style="margin-top: 10px">
+            เริ่ม: {{ track.firstText }}<br />
+            จบ: {{ track.lastText }}<br />
+            สถานะ: {{ track.status }}
+          </div>
+        </article>
+
+        <article
+          v-if="!trackSummaries.length"
+          class="card track-card"
+          style="grid-column: 1 / -1; text-align: center"
+        >
+          <div class="track-sub">ยังไม่มีรถที่เลือกให้แสดง</div>
+        </article>
       </section>
+
+      <section class="card table-card">
+        <div class="table-head">
+          <div>
+            <h2>ตารางข้อมูลย้อนหลัง</h2>
+            <p class="small-note">
+              แสดงข้อมูลย้อนหลังตามช่วงวันที่ที่เลือก พร้อมตัวกรองรถและเวลา
+            </p>
+          </div>
+
+          <div class="table-filters">
+            <div class="filter-group">
+              <label>เลือกรถ</label>
+              <select v-model="filterVehicle" class="select-input">
+                <option value="">ทั้งหมด</option>
+                <option
+                  v-for="device in deviceOptions"
+                  :key="'filter-' + device"
+                  :value="device"
+                >
+                  {{ device }}
+                </option>
+              </select>
+            </div>
+
+            <div class="filter-group">
+              <label>ช่วงเวลา (ชั่วโมง)</label>
+              <select v-model="filterHourSlot" class="select-input">
+                <option value="">แสดงทั้งหมดของวัน</option>
+                <option v-for="h in 24" :key="h - 1" :value="h - 1">
+                  {{ pad(h - 1) }}:00 - {{ pad(h - 1) }}:59
+                </option>
+              </select>
+            </div>
+
+            <div class="filter-group">
+              <label>คำสั่ง</label>
+              <div class="actions compact">
+                <button
+                  class="btn primary"
+                  @click="loadTracks"
+                  :disabled="loading || deviceLoading"
+                >
+                  {{ loading ? 'กำลังโหลด...' : 'โหลดข้อมูล' }}
+                </button>
+                <button
+                  class="btn secondary"
+                  @click="exportCsv"
+                  :disabled="!visibleAllFilteredPoints.length"
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>รถ</th>
+                <th>จุดที่</th>
+                <th>เวลา</th>
+                <th>Lat</th>
+                <th>Lng</th>
+                <th>Speed</th>
+                <th>Acc</th>
+                <th>ระยะจุดนี้ (m)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p, idx) in visibleAllFilteredPoints" :key="p.key">
+                <td>{{ idx + 1 }}</td>
+                <td>
+                  <span
+                    class="pill badge-pill"
+                    :style="{ borderColor: p.color }"
+                  >
+                    <span
+                      class="track-dot"
+                      :style="{ background: p.color, width: '10px', height: '10px' }"
+                    ></span>
+                    {{ p.label }}
+                  </span>
+                </td>
+                <td>{{ p.pointNo ?? ('จุดที่ ' + (idx + 1)) }}</td>
+                <td>{{ formatDateTime(p.timestampiso) }}</td>
+                <td>{{ formatCoord(p.lat) }}</td>
+                <td>{{ formatCoord(p.lng) }}</td>
+                <td>{{ formatSpeed(p.speed) }}</td>
+                <td>{{ formatAccuracy(p.accuracy) }}</td>
+                <td>{{ p.segmentMeters != null ? p.segmentMeters.toFixed(2) : '-' }}</td>
+                <td>
+                  <button class="row-btn" @click="focusPoint(p)">ดู</button>
+                </td>
+              </tr>
+
+              <tr v-if="!visibleAllFilteredPoints.length">
+                <td
+                  colspan="10"
+                  style="text-align: center; padding: 22px; color: var(--muted)"
+                >
+                  ยังไม่มีข้อมูล
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="status" :class="statusType">{{ status }}</p>
     </div>
 
     <script src="firebase-config.js"></script>
-    <script src="nav.js"></script>
     <script src="history.js"></script>
   </body>
 </html>
