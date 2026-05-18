@@ -239,7 +239,7 @@ createApp({
     },
     formatSpeed(value) {
       if (typeof value !== "number" || !Number.isFinite(value)) return "-";
-      return `${(value * 3.6).toFixed(1)} km/h`;
+      return `${value.toFixed(1)} km/h`;
     },
     formatAccuracy(value) {
       return typeof value === "number" && Number.isFinite(value)
@@ -341,7 +341,11 @@ createApp({
           key: child.key,
           lat,
           lng,
-          speed: Number.isFinite(Number(value.speed)) ? Number(value.speed) : null,
+          speed: Number.isFinite(Number(value.speed_kmh))
+            ? Number(value.speed_kmh)
+            : Number.isFinite(Number(value.speed))
+              ? Number(value.speed)
+              : null,
           accuracy: Number.isFinite(Number(value.accuracy)) ? Number(value.accuracy) : null,
           timestampiso,
           date,

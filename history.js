@@ -140,6 +140,7 @@ createApp({
     return {
       deviceOptions: [],
       deviceLoading: false,
+      vehicleMappings: {},
 
       vehicleId1: "",
       vehicleId2: "",
@@ -206,6 +207,10 @@ createApp({
       return `${this.fromDate || "-"} ถึง ${this.toDate || "-"}`;
     },
 
+    vehicleLabelMap() {
+      return this.vehicleMappings || {};
+    },
+
     vehicleConfigs() {
       const raw = [
         {
@@ -236,9 +241,12 @@ createApp({
 
       return raw.map((cfg) => {
         const id = String(cfg.vehicleId || "").trim();
+        const plate = this.vehicleLabelMap[id]?.plate || "";
         return {
           ...cfg,
           vehicleId: id,
+          plateText: plate,
+          displayLabel: id ? (plate ? `${id} → ${plate}` : id) : "",
           color: id ? colorForId(id) : "#94a3b8",
         };
       });
@@ -306,6 +314,7 @@ createApp({
             ...p,
             slot: track.slot,
             label: track.label,
+            displayLabel: track.displayLabel || track.vehicleId,
             vehicleId: track.vehicleId,
             color: track.color,
             pointNo: p.pointNo ?? idx + 1,
@@ -372,6 +381,39 @@ createApp({
   },
 
   methods: {
+    normalizeVehicleId(input) {
+      if (input === null || input === undefined) return "";
+
+      if (typeof input === "string") return input.trim();
+      if (typeof input === "number" || typeof input === "bigint" || typeof input === "boolean") {
+        return String(input).trim();
+      }
+
+      if (typeof input === "object") {
+        if ("vehicleId" in input) return this.normalizeVehicleId(input.vehicleId);
+        if ("id" in input) return this.normalizeVehicleId(input.id);
+        if ("key" in input) return this.normalizeVehicleId(input.key);
+        if ("value" in input && typeof input.value !== "object") {
+          return this.normalizeVehicleId(input.value);
+        }
+      }
+
+      try {
+        return String(input).trim();
+      } catch {
+        return "";
+      }
+    },
+
+    displayVehicleText(vehicleId) {
+      const id = this.normalizeVehicleId(vehicleId);
+      if (!id) return "-";
+
+      const plate = this.vehicleMappings?.[id]?.plate || "";
+      if (plate) return `${id} → ${plate}`;
+      return id;
+    },
+
     pad(n) {
       return pad(n);
     },
@@ -417,6 +459,35 @@ createApp({
       }
     },
 
+    async loadVehicleMappings() {
+      if (!this.initFirebase()) return false;
+
+      try {
+        const snap = await firebaseDb.ref("vehicle_mappings").once("value");
+        const map = {};
+
+        snap.forEach((child) => {
+          const value = child.val() || {};
+          const vehicleId = String(child.key || value.vehicle_id || "").trim();
+          if (!vehicleId) return;
+
+          map[vehicleId] = {
+            plate: String(value.plate || value.license_plate || "").trim(),
+            note: String(value.note || "").trim(),
+            updatedAt: value.updatedAt || value.updated_at || null,
+          };
+        });
+
+        this.vehicleMappings = map;
+        return true;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`อ่าน mapping รถไม่สำเร็จ: ${err.message || err}`, "warn");
+        this.vehicleMappings = {};
+        return false;
+      }
+    },
+
     async loadDeviceOptions() {
       if (!this.initFirebase()) return false;
 
@@ -435,6 +506,8 @@ createApp({
           a.localeCompare(b, "en", { numeric: true, sensitivity: "base" }),
         );
         this.deviceOptions = keys;
+
+        await this.loadVehicleMappings();
 
         if (!this.vehicleId1) this.vehicleId1 = keys[0] || "";
         if (!this.vehicleId2) this.vehicleId2 = keys[1] || "";
@@ -561,7 +634,11 @@ createApp({
           key: child.key,
           lat,
           lng,
-          speed: Number.isFinite(Number(value.speed)) ? Number(value.speed) : null,
+          speed: Number.isFinite(Number(value.speed_kmh))
+            ? Number(value.speed_kmh)
+            : Number.isFinite(Number(value.speed))
+              ? Number(value.speed)
+              : null,
           accuracy: Number.isFinite(Number(value.accuracy))
             ? Number(value.accuracy)
             : null,
@@ -678,7 +755,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${track.label} — ${track.vehicleId}</strong><br>${formatDateTime(
+              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>${formatDateTime(
                 p.timestampiso,
               )}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(
                 p.lng,
@@ -721,7 +798,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${track.label} — ${track.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1
+              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1
               }<br>${formatDateTime(start.timestampiso)}`,
             );
 
@@ -734,7 +811,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${track.label} — ${track.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1
+              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1
               }<br>${formatDateTime(end.timestampiso)}<br>ระยะจุดนี้ ${end.segmentMeters != null ? end.segmentMeters.toFixed(2) : "-"
               } m`,
             );
@@ -753,7 +830,7 @@ createApp({
             })
               .addTo(mapInstance)
               .bindPopup(
-                `<strong>${track.label} — ${track.vehicleId}</strong><br>${formatDateTime(
+                `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>${formatDateTime(
                   p.timestampiso,
                 )}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(
                   p.lng,
@@ -798,7 +875,7 @@ createApp({
 
     formatSpeed(value) {
       if (typeof value !== "number" || !Number.isFinite(value)) return "-";
-      return `${(value * 3.6).toFixed(1)} km/h`;
+      return `${value.toFixed(1)} km/h`;
     },
 
     formatAccuracy(value) {
@@ -839,7 +916,6 @@ createApp({
         "เวลา",
         "Lat",
         "Lng",
-        "Speed(m/s)",
         "Speed(km/h)",
         "Accuracy(m)",
         "ระยะจุดนี้ (m)",
@@ -859,7 +935,7 @@ createApp({
             p.lng,
             p.speed ?? "",
             typeof p.speed === "number" && Number.isFinite(p.speed)
-              ? (p.speed * 3.6).toFixed(1)
+              ? p.speed.toFixed(1)
               : "",
             p.accuracy ?? "",
             p.segmentMeters != null ? p.segmentMeters.toFixed(2) : "",

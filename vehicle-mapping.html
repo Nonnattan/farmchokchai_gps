@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f6fb" />
+    <title>Vehicle Mapping Settings</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="nav.css" />
+    <link rel="stylesheet" href="vehicle-mapping.css" />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <div class="site-nav__bar">
+        <button
+          class="site-nav__toggle"
+          type="button"
+          aria-label="เปิดเมนู"
+          aria-expanded="false"
+          data-nav-toggle
+        >
+          ☰
+        </button>
+
+        <a href="index.html" class="site-nav__brand">
+          <span class="site-nav__logo">🚚</span>
+          <span class="site-nav__title">
+            <strong>Farm Chokchai GPS</strong>
+            <span>Realtime & History</span>
+          </span>
+        </a>
+
+        <span class="site-nav__hint">กดเมนูด้านซ้าย</span>
+      </div>
+    </nav>
+
+    <div class="site-nav__backdrop" data-nav-backdrop></div>
+
+    <aside class="site-nav__drawer" data-nav-drawer>
+      <div class="site-nav__drawer-head">
+        <div class="site-nav__drawer-logo">🚚</div>
+        <div class="site-nav__drawer-title">
+          <strong>Farm Chokchai GPS</strong>
+          <span>เลือกหน้าได้จากเมนูนี้</span>
+        </div>
+      </div>
+
+      <div class="site-nav__links">
+        <a href="index.html" class="site-nav__link">Home</a>
+        <a href="realtime.html" class="site-nav__link">Realtime</a>
+        <a href="history.html" class="site-nav__link">History</a>
+        <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+        <a href="dashboard.html" class="site-nav__link">dashboard</a>
+      </div>
+
+      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
+    </aside>
+
+    <div id="app" class="app settings-app">
+      <header class="hero card">
+        <div class="hero-badge">VEHICLE MAPPING</div>
+        <h1>ตั้งค่าจับคู่อุปกรณ์กับทะเบียนรถ</h1>
+        <p class="subtitle">
+          จับคู่ <strong>vehicle_id</strong> กับทะเบียนรถ เช่น
+          <code>GPS_01 = กข-1234</code>
+          เพื่อให้แสดงชื่อรถได้สวยขึ้นทั้งระบบ
+        </p>
+      </header>
+
+      <section class="card settings-grid">
+        <article class="settings-panel">
+          <div class="panel-head">
+            <div>
+              <h2>
+                {{ editing ? 'แก้ไขข้อมูลจับคู่รถ' : 'เพิ่มข้อมูลจับคู่รถ' }}
+              </h2>
+              <p class="small-note">
+                บันทึกลง Firebase path <code>vehicle_mappings</code>
+              </p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>vehicle_id</label>
+            <select v-model="form.vehicleId" class="select-input">
+              <option value="">เลือก vehicle_id</option>
+              <option v-for="id in deviceOptions" :key="id" :value="id">
+                {{ id }}
+              </option>
+            </select>
+            <small>ถ้าไม่อยู่ในรายการ สามารถพิมพ์เพิ่มได้ด้านล่าง</small>
+          </div>
+
+          <div class="field">
+            <label>vehicle_id แบบพิมพ์เอง</label>
+            <input
+              v-model.trim="form.vehicleId"
+              type="text"
+              class="text-input"
+              placeholder="เช่น GPS_01"
+            />
+          </div>
+
+          <div class="field">
+            <label>ทะเบียนรถ</label>
+            <input
+              v-model.trim="form.plate"
+              type="text"
+              class="text-input"
+              placeholder="เช่น กข-1234"
+            />
+          </div>
+
+          <div class="field">
+            <label>หมายเหตุ</label>
+            <input
+              v-model.trim="form.note"
+              type="text"
+              class="text-input"
+              placeholder="เช่น รถขนอาหาร"
+            />
+          </div>
+
+          <div class="actions">
+            <button class="btn primary" @click="saveMapping" :disabled="saving">
+              {{ saving ? 'กำลังบันทึก...' : 'บันทึก' }}
+            </button>
+            <button class="btn secondary" @click="resetForm" type="button">
+              ล้างฟอร์ม
+            </button>
+            <button class="btn secondary" @click="reloadAll" type="button">
+              รีเฟรช
+            </button>
+          </div>
+        </article>
+
+        <article class="settings-panel">
+          <div class="panel-head">
+            <div>
+              <h2>รายชื่อ vehicle_id ที่อ่านได้</h2>
+            </div>
+          </div>
+
+          <div class="chips">
+            <span v-for="id in deviceOptions" :key="'chip-' + id" class="chip"
+              >{{ id }}</span
+            >
+            <div v-if="!deviceOptions.length" class="empty-state">
+              ยังไม่พบ device
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="card settings-panel">
+        <div class="panel-head">
+          <div>
+            <h2>รายการจับคู่ทั้งหมด</h2>
+            <p class="small-note">สามารถแก้ไขหรือลบได้จากตารางนี้</p>
+          </div>
+          <div class="table-actions">
+            <input
+              v-model.trim="search"
+              type="text"
+              class="text-input search-input"
+              placeholder="ค้นหา vehicle_id หรือทะเบียน"
+            />
+          </div>
+        </div>
+
+        <div class="table-wrap table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>vehicle_id</th>
+                <th>ทะเบียน</th>
+                <th>หมายเหตุ</th>
+                <th>อัปเดตล่าสุด</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in filteredMappings" :key="row.vehicleId">
+                <td>{{ row.vehicleId }}</td>
+                <td>{{ row.plate || '-' }}</td>
+                <td>{{ row.note || '-' }}</td>
+                <td>
+                  {{ row.updatedAt ? formatDateTime(row.updatedAt) : '-' }}
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <button class="row-btn" @click="editMapping(row)">
+                      แก้ไข
+                    </button>
+                    <button
+                      class="row-btn danger-btn"
+                      @click="deleteMapping(row.vehicleId)"
+                    >
+                      ลบ
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="!filteredMappings.length">
+                <td colspan="5" class="empty-cell">ยังไม่มีข้อมูลจับคู่</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="status" :class="statusType">{{ status }}</p>
+    </div>
+
+    <script src="../firebase-config.js"></script>
+    <script src="nav.js"></script>
+    <script src="vehicle-mapping.js"></script>
+  </body>
+</html>

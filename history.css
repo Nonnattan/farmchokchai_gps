@@ -5,6 +5,13 @@ body {
     linear-gradient(180deg, #f7f9fc 0%, #eef4fb 100%);
 }
 
+body {
+  --shadow: none;
+  --shadow-sm: none;
+  --border: #c8d4e3;
+  --border-strong: #9fb2c9;
+}
+
 body.nav-open {
   overflow: hidden;
 }
@@ -503,4 +510,170 @@ input[type="number"]:focus {
   .table-scroll td {
     padding: 10px 12px;
   }
+}
+
+/* Mobile improvements */
+@media (max-width: 900px) {
+  .controls,
+  .table-card,
+  .filter-card {
+    padding: 16px;
+  }
+
+  .device-grid,
+  .two-cols {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    gap: 8px;
+  }
+
+  .actions.compact {
+    flex-wrap: wrap;
+  }
+
+  .table-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .table-filters {
+    width: 100%;
+  }
+
+  .filter-group {
+    min-width: 100%;
+  }
+
+  .map-wrap,
+  #map {
+    min-height: 390px;
+  }
+
+  .vehicle-summary-list {
+    grid-template-columns: 1fr;
+  }
+
+  .pill-row {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 18px;
+  }
+
+  .hero h1 {
+    font-size: 22px;
+  }
+
+  .controls,
+  .table-card,
+  .filter-card {
+    padding: 14px;
+  }
+
+  .mini-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .table-scroll {
+    border-radius: 14px;
+  }
+
+  .table-scroll th,
+  .table-scroll td {
+    padding: 10px 10px;
+    font-size: 12px;
+  }
+
+  #map {
+    min-height: 320px;
+  }
+
+  .track-head__left {
+    flex-wrap: wrap;
+  }
+
+  .metric-row {
+    flex-wrap: wrap;
+  }
+
+  .badge-pill {
+    white-space: normal;
+  }
+}
+
+
+.card,
+.hero,
+.controls,
+.filter-card,
+.table-card,
+.track-card,
+.map-wrap,
+.mini-stat,
+.select-input,
+.text-input,
+.date-input,
+input[type="date"],
+input[type="text"],
+input[type="number"],
+.btn,
+.row-btn,
+.table-wrap,
+.pill,
+.metric-pill {
+  box-shadow: none !important;
+}
+
+.card,
+.hero,
+.controls,
+.filter-card,
+.table-card,
+.track-card,
+.map-wrap,
+.mini-stat,
+.table-wrap {
+  border: 1px solid var(--border-strong);
+}
+
+.select-input,
+.text-input,
+.date-input,
+input[type="date"],
+input[type="text"],
+input[type="number"] {
+  border-width: 2px;
+  background: #fff;
+}
+
+.select-input:focus,
+.text-input:focus,
+.date-input:focus,
+input[type="date"]:focus,
+input[type="text"]:focus,
+input[type="number"]:focus {
+  box-shadow: none;
+  border-color: #2563eb;
+}
+
+.btn {
+  border-width: 2px;
+}
+
+.btn.primary,
+.btn.secondary,
+.btn.danger,
+.row-btn {
+  box-shadow: none !important;
+}
+
+.table-card table,
+.table-card th,
+.table-card td {
+  border-color: var(--border);
 }

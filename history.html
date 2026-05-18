@@ -47,16 +47,15 @@
     <aside class="site-nav__drawer" data-nav-drawer>
       <div class="site-nav__drawer-head">
         <div class="site-nav__drawer-logo">🚚</div>
-        <div class="site-nav__drawer-title">
-          <strong>Farm Chokchai GPS</strong>
-          <span>เลือกหน้าได้จากเมนูนี้</span>
-        </div>
+        <div class="site-nav__drawer-title"></div>
       </div>
 
       <div class="site-nav__links">
         <a href="index.html" class="site-nav__link">Home</a>
         <a href="realtime.html" class="site-nav__link">Realtime</a>
         <a href="history.html" class="site-nav__link">History</a>
+        <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+        <a href="dashboard.html" class="site-nav__link">dashboard</a>
       </div>
 
       <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
@@ -71,7 +70,7 @@
 
       <section class="card controls">
         <div class="field full">
-          <label>เลือก device จาก Firebase</label>
+          <label>เลือก device จาก Firebase (แสดงเป็น device → ทะเบียน)</label>
 
           <div class="device-grid">
             <div class="sub-field">
@@ -90,13 +89,10 @@
                   :key="'d1-' + device"
                   :value="device"
                 >
-                  {{ device }}
+                  {{ displayVehicleText(device) }}
                 </option>
               </select>
-              <small
-                >ใช้ข้อมูลจาก path
-                <strong>locations/&lt;device&gt;</strong></small
-              >
+              <small>เลือก device คันที่ 1 </small>
             </div>
 
             <div class="sub-field">
@@ -111,7 +107,7 @@
                   :key="'d2-' + device"
                   :value="device"
                 >
-                  {{ device }}
+                  {{ displayVehicleText(device) }}
                 </option>
               </select>
               <small>เลือก device คันที่ 2</small>
@@ -129,7 +125,7 @@
                   :key="'d3-' + device"
                   :value="device"
                 >
-                  {{ device }}
+                  {{ displayVehicleText(device) }}
                 </option>
               </select>
               <small>เลือก device คันที่ 3</small>
@@ -147,7 +143,7 @@
                   :key="'d4-' + device"
                   :value="device"
                 >
-                  {{ device }}
+                  {{ displayVehicleText(device) }}
                 </option>
               </select>
               <small>เลือก device คันที่ 4</small>
@@ -247,7 +243,7 @@
               v-model="showVehicle1"
               @change="renderRoute"
             />
-            แสดงคันที่ 1 — {{ vehicleId1 }}
+            แสดงคันที่ 1 — {{ displayVehicleText(vehicleId1) }}
           </label>
 
           <label v-if="vehicleId2" class="pill">
@@ -256,7 +252,7 @@
               v-model="showVehicle2"
               @change="renderRoute"
             />
-            แสดงคันที่ 2 — {{ vehicleId2 }}
+            แสดงคันที่ 2 — {{ displayVehicleText(vehicleId2) }}
           </label>
 
           <label v-if="vehicleId3" class="pill">
@@ -265,7 +261,7 @@
               v-model="showVehicle3"
               @change="renderRoute"
             />
-            แสดงคันที่ 3 — {{ vehicleId3 }}
+            แสดงคันที่ 3 — {{ displayVehicleText(vehicleId3) }}
           </label>
 
           <label v-if="vehicleId4" class="pill">
@@ -274,7 +270,7 @@
               v-model="showVehicle4"
               @change="renderRoute"
             />
-            แสดงคันที่ 4 — {{ vehicleId4 }}
+            แสดงคันที่ 4 — {{ displayVehicleText(vehicleId4) }}
           </label>
 
           <span class="pill">ช่วงวันที่: {{ selectedDateRangeText }}</span>
@@ -300,7 +296,10 @@
               ></span>
               <div>
                 <div class="track-title">
-                  {{ track.label }} — {{ track.vehicleId }}
+                  {{ track.label }} — {{ track.displayLabel || track.vehicleId }}
+                </div>
+                <div class="track-sub" style="margin-top: 4px">
+                  ทะเบียน: {{ track.plateText || 'ยังไม่จับคู่' }}
                 </div>
               </div>
               <button
@@ -360,7 +359,7 @@
                   :key="'filter-' + device"
                   :value="device"
                 >
-                  {{ device }}
+                  {{ displayVehicleText(device) }}
                 </option>
               </select>
             </div>
@@ -407,7 +406,7 @@
                 <th>เวลา</th>
                 <th>Lat</th>
                 <th>Lng</th>
-                <th>Speed</th>
+                <th>Speed (km/h)</th>
                 <th>Acc</th>
                 <th>ระยะจุดนี้ (m)</th>
                 <th></th>
@@ -425,7 +424,7 @@
                       class="track-dot"
                       :style="{ background: p.color, width: '10px', height: '10px' }"
                     ></span>
-                    {{ p.label }}
+                    {{ p.label }} — {{ p.displayLabel || p.vehicleId }}
                   </span>
                 </td>
                 <td>{{ p.pointNo ?? ('จุดที่ ' + (idx + 1)) }}</td>
@@ -434,7 +433,10 @@
                 <td>{{ formatCoord(p.lng) }}</td>
                 <td>{{ formatSpeed(p.speed) }}</td>
                 <td>{{ formatAccuracy(p.accuracy) }}</td>
-                <td>{{ p.segmentMeters != null ? p.segmentMeters.toFixed(2) : '-' }}</td>
+                <td>
+                  {{ p.segmentMeters != null ? p.segmentMeters.toFixed(2) : '-'
+                  }}
+                </td>
                 <td>
                   <button class="row-btn" @click="focusPoint(p)">ดู</button>
                 </td>

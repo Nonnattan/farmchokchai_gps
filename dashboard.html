@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f6fb" />
+    <title>Farm Chokchai GPS Dashboard</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="nav.css" />
+    <link rel="stylesheet" href="dashboard.css" />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+  </head>
+  <body>
+    <nav class="site-nav">
+      <div class="site-nav__bar">
+        <button
+          class="site-nav__toggle"
+          type="button"
+          aria-label="เปิดเมนู"
+          aria-expanded="false"
+          data-nav-toggle
+        >
+          ☰
+        </button>
+
+        <a href="index.html" class="site-nav__brand">
+          <span class="site-nav__logo">🚚</span>
+          <span class="site-nav__title">
+            <strong>Farm Chokchai GPS</strong>
+            <span>Realtime & History</span>
+          </span>
+        </a>
+
+        <span class="site-nav__hint">กดเมนูด้านซ้าย</span>
+      </div>
+    </nav>
+
+    <div class="site-nav__backdrop" data-nav-backdrop></div>
+
+    <aside class="site-nav__drawer" data-nav-drawer>
+      <div class="site-nav__drawer-head">
+        <div class="site-nav__drawer-logo">🚚</div>
+        <div class="site-nav__drawer-title">
+          <strong>Farm Chokchai GPS</strong>
+          <span>เลือกหน้าได้จากเมนูนี้</span>
+        </div>
+      </div>
+
+      <div class="site-nav__links">
+        <a href="index.html" class="site-nav__link">Home</a>
+        <a href="realtime.html" class="site-nav__link">Realtime</a>
+        <a href="history.html" class="site-nav__link">History</a>
+        <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+        <a href="dashboard.html" class="site-nav__link">dashboard</a>
+      </div>
+
+      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
+    </aside>
+
+    <div id="app" class="app dashboard-app">
+      <header class="hero card">
+        <div class="hero-badge">ADMIN DASHBOARD</div>
+        <h1>ภาพรวมระบบ GPS ทั้งหมด</h1>
+        <p class="subtitle">
+          ดูจำนวนรถที่ออนไลน์วันนี้, จุดข้อมูลล่าสุด,
+          และสถานะการจับคู่ทะเบียนรถได้จากหน้าเดียว
+        </p>
+      </header>
+
+      <section class="dashboard-topbar">
+        <button class="btn primary" @click="refreshAll" :disabled="loading">
+          {{ loading ? 'กำลังโหลด...' : 'รีเฟรชข้อมูล' }}
+        </button>
+        <a class="btn secondary link-btn" href="vehicle-mapping.html"
+          >ตั้งค่าจับคู่รถ</a
+        >
+        <a class="btn secondary link-btn" href="realtime.html"
+          >ไปหน้า Realtime</a
+        >
+        <a class="btn secondary link-btn" href="history.html">ไปหน้า History</a>
+      </section>
+
+      <section class="mini-grid dashboard-stats">
+        <div class="mini-stat">
+          <span>รถวันนี้</span>
+          <strong>{{ liveVehicleCount }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>จุดวันนี้</span>
+          <strong>{{ todayPointCount }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>ทะเบียนที่จับคู่</span>
+          <strong>{{ mappingCount }}</strong>
+        </div>
+        <div class="mini-stat">
+          <span>อัปเดตล่าสุด</span>
+          <strong>{{ lastUpdatedText }}</strong>
+        </div>
+      </section>
+
+      <section class="card dashboard-grid">
+        <article class="dashboard-panel">
+          <div class="panel-head">
+            <div>
+              <h2>รถที่มีข้อมูลวันนี้</h2>
+              <p class="small-note">แสดงเฉพาะคันที่มีข้อมูลในวันนี้</p>
+            </div>
+          </div>
+
+          <div class="vehicle-list">
+            <article
+              v-for="vehicle in liveVehicles"
+              :key="vehicle.vehicleId"
+              class="vehicle-row"
+            >
+              <div class="vehicle-row__left">
+                <span
+                  class="track-dot"
+                  :style="{ background: vehicle.color }"
+                ></span>
+                <div>
+                  <div class="track-title">{{ vehicle.vehicleId }}</div>
+                  <div class="track-sub">
+                    {{ vehicle.plateText }} • จุด {{ vehicle.pointCount }} •
+                    ระยะ {{ vehicle.distanceText }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="vehicle-row__right">
+                <span class="metric-pill"
+                  >ล่าสุด {{ formatDateTime(vehicle.latestTime) }}</span
+                >
+                <span class="metric-pill"
+                  >ช่วงเส้น {{ vehicle.segmentCount }}</span
+                >
+              </div>
+            </article>
+
+            <div v-if="!liveVehicles.length" class="empty-state">
+              ยังไม่มีข้อมูลรถวันนี้
+            </div>
+          </div>
+        </article>
+
+        <article class="dashboard-panel">
+          <div class="panel-head">
+            <div>
+              <h2>ทะเบียนที่จับคู่แล้ว</h2>
+              <p class="small-note">
+                อัปเดตจาก Firebase path <code>vehicle_mappings</code>
+              </p>
+            </div>
+          </div>
+
+          <div class="mapping-list">
+            <article
+              v-for="item in mappingRows"
+              :key="item.vehicleId"
+              class="mapping-row"
+            >
+              <div>
+                <div class="track-title">{{ item.vehicleId }}</div>
+                <div class="track-sub">{{ item.plate || '-' }}</div>
+              </div>
+              <div class="track-sub">
+                {{ item.note || 'ไม่มีหมายเหตุ' }}<br />
+                อัปเดต: {{ item.updatedAt ? formatDateTime(item.updatedAt) : '-'
+                }}
+              </div>
+            </article>
+
+            <div v-if="!mappingRows.length" class="empty-state">
+              ยังไม่มีข้อมูลจับคู่รถ
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="card dashboard-panel">
+        <div class="panel-head">
+          <div>
+            <h2>สรุปต่อคัน</h2>
+            <p class="small-note">
+              เหมาะสำหรับดูว่าคันไหนวิ่งล่าสุดและมีทะเบียนอะไรจับคู่ไว้
+            </p>
+          </div>
+        </div>
+
+        <div class="summary-table-wrap">
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>vehicle_id</th>
+                <th>ทะเบียน</th>
+                <th>จุดวันนี้</th>
+                <th>ระยะทาง</th>
+                <th>ล่าสุด</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="vehicle in liveVehicles"
+                :key="'sum-' + vehicle.vehicleId"
+              >
+                <td>{{ vehicle.vehicleId }}</td>
+                <td>{{ vehicle.plateText }}</td>
+                <td>{{ vehicle.pointCount }}</td>
+                <td>{{ vehicle.distanceText }}</td>
+                <td>{{ formatDateTime(vehicle.latestTime) }}</td>
+              </tr>
+              <tr v-if="!liveVehicles.length">
+                <td colspan="5" class="empty-cell">ยังไม่มีข้อมูล</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="status" :class="statusType">{{ status }}</p>
+    </div>
+
+    <script src="../firebase-config.js"></script>
+    <script src="nav.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

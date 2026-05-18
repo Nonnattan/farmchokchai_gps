@@ -432,3 +432,120 @@ tbody tr:hover {
     /* ให้ Filter กว้างเต็มจอบนมือถือ */
   }
 }
+
+/* Mobile improvements */
+@media (max-width: 900px) {
+  .topbar {
+    gap: 10px;
+  }
+
+
+
+  .controls-card,
+  .table-card {
+    padding: 16px;
+  }
+
+  .vehicle-selection-list {
+    gap: 12px;
+  }
+
+  .mini-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .table-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .table-filters {
+    width: 100%;
+  }
+
+  .filter-group,
+  .filter-group select,
+  .filter-group input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .actions.compact {
+    flex-wrap: wrap;
+  }
+
+  .vehicle-row,
+  .track-head__left,
+  .track-head,
+  .metric-row {
+    gap: 10px;
+  }
+
+  .track-head__left {
+    flex-wrap: wrap;
+  }
+
+  .vehicle-summary-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 18px;
+  }
+
+  .hero h1 {
+    font-size: 22px;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .topbar .btn {
+    width: 100%;
+  }
+
+  .controls-card,
+  .table-card {
+    padding: 14px;
+  }
+
+  .table-scroll {
+    border-radius: 14px;
+  }
+
+  .table-scroll th,
+  .table-scroll td {
+    padding: 10px 10px;
+    font-size: 12px;
+  }
+
+  .row-btn,
+  .btn {
+    min-height: 40px;
+  }
+
+  #map {
+    min-height: 330px;
+  }
+
+  .vehicle-row,
+  .mapping-row {
+    flex-direction: column;
+  }
+
+  .metric-row {
+    flex-wrap: wrap;
+  }
+
+  .pill-row {
+    flex-wrap: wrap;
+  }
+
+  .badge-pill {
+    white-space: normal;
+  }
+}
