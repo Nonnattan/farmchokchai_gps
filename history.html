@@ -400,7 +400,6 @@
           <table>
             <thead>
               <tr>
-                <th>#</th>
                 <th>รถ</th>
                 <th>จุดที่</th>
                 <th>เวลา</th>
@@ -409,12 +408,12 @@
                 <th>Speed (km/h)</th>
                 <th>Acc</th>
                 <th>ระยะจุดนี้ (m)</th>
+                <th>ระยะรวม (km)</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(p, idx) in visibleAllFilteredPoints" :key="p.key">
-                <td>{{ idx + 1 }}</td>
                 <td>
                   <span
                     class="pill badge-pill"
@@ -435,6 +434,10 @@
                 <td>{{ formatAccuracy(p.accuracy) }}</td>
                 <td>
                   {{ p.segmentMeters != null ? p.segmentMeters.toFixed(2) : '-'
+                  }}
+                </td>
+                <td>
+                  {{ p.cumulativeKm != null ? p.cumulativeKm.toFixed(2) : '-'
                   }}
                 </td>
                 <td>

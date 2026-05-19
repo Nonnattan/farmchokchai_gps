@@ -86,6 +86,7 @@ createApp({
       gapMinutesInput: "10",
       vehiclesById: {},
       visibleVehicles: {},
+      vehicleMappings: {},
       lastRefreshAt: null,
       mapReady: false,
       resizeHandler: null,
@@ -106,6 +107,10 @@ createApp({
       return this.gapThresholdMinutes * 60 * 1000;
     },
 
+    vehicleLabelMap() {
+      return this.vehicleMappings || {};
+    },
+
     vehicleSummaries() {
       const entries = Object.entries(this.vehiclesById).map(([vehicleId, data]) => {
         const color = colorForId(vehicleId);
@@ -114,6 +119,8 @@ createApp({
         const distanceKm = this.distanceKmFromSegments(segments);
         const latest = points[points.length - 1] || null;
         const latestTime = latest?.date ? latest.date.getTime() : 0;
+        const plateText = this.vehicleLabelMap[vehicleId]?.plate || "";
+        const displayLabel = vehicleId ? (plateText ? `${vehicleId} → ${plateText}` : vehicleId) : "";
 
         return {
           vehicleId,
@@ -128,6 +135,8 @@ createApp({
           latestTime,
           lastUpdatedAt: data.lastSeenAt || null,
           lastSeenAt: data.lastSeenAt || null,
+          plateText,
+          displayLabel,
         };
       });
 
@@ -151,6 +160,8 @@ createApp({
             ...p,
             vehicleId: vehicle.vehicleId,
             color: vehicle.color,
+            displayLabel: vehicle.displayLabel || vehicle.vehicleId,
+            plateText: vehicle.plateText || "",
           });
         });
       }
@@ -261,6 +272,43 @@ createApp({
         return false;
       }
     },
+    async loadVehicleMappings() {
+      if (!this.initFirebase()) return false;
+
+      try {
+        const snap = await firebaseDb.ref("vehicle_mappings").once("value");
+        const map = {};
+
+        snap.forEach((child) => {
+          const value = child.val() || {};
+          const vehicleId = String(child.key || value.vehicle_id || "").trim();
+          if (!vehicleId) return;
+
+          map[vehicleId] = {
+            plate: String(value.plate || value.license_plate || "").trim(),
+            note: String(value.note || "").trim(),
+            updatedAt: value.updatedAt || value.updated_at || null,
+          };
+        });
+
+        this.vehicleMappings = map;
+        return true;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`อ่าน mapping รถไม่สำเร็จ: ${err.message || err}`, "warn");
+        this.vehicleMappings = {};
+        return false;
+      }
+    },
+
+    displayVehicleText(vehicleId) {
+      const id = String(vehicleId || "").trim();
+      if (!id) return "-";
+
+      const plate = this.vehicleMappings?.[id]?.plate || "";
+      return plate ? `${id} → ${plate}` : id;
+    },
+
     initMap() {
       if (mapInstance) return;
 
@@ -352,6 +400,8 @@ createApp({
           raw: value,
           pointNo: 0,
           segmentMeters: 0,
+          cumulativeMeters: 0,
+          cumulativeKm: 0,
         });
       });
 
@@ -365,10 +415,13 @@ createApp({
         p.pointNo = idx + 1;
         if (idx === 0) {
           p.segmentMeters = 0;
+          p.cumulativeMeters = 0;
         } else {
           const prev = points[idx - 1];
           p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
         }
+        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
       });
 
       return points;
@@ -384,8 +437,10 @@ createApp({
       liveRef = null;
       liveCallback = null;
     },
-    subscribeTodayLive() {
+    async subscribeTodayLive() {
       if (!this.initFirebase()) return;
+
+      await this.loadVehicleMappings();
 
       this.loading = true;
       this.setStatus("กำลังโหลดรถวิ่งของวันนี้...", "info");
@@ -469,7 +524,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>${this.formatDateTime(p.timestampiso)}<br>Lat ${formatNum(
+              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(p.timestampiso)}<br>Lat ${formatNum(
                 p.lat,
                 6,
               )}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
@@ -505,7 +560,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1}<br>${this.formatDateTime(
+              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1}<br>${this.formatDateTime(
                 start.timestampiso,
               )}`,
             );
@@ -519,7 +574,7 @@ createApp({
           })
             .addTo(mapInstance)
             .bindPopup(
-              `<strong>${vehicle.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1}<br>${this.formatDateTime(
+              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1}<br>${this.formatDateTime(
                 end.timestampiso,
               )}`,
             );
@@ -537,7 +592,7 @@ createApp({
             })
               .addTo(mapInstance)
               .bindPopup(
-                `<strong>${vehicle.vehicleId}</strong><br>${this.formatDateTime(
+                `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(
                   p.timestampiso,
                 )}<br>Speed ${this.formatSpeed(p.speed)}`,
               );
@@ -560,12 +615,16 @@ createApp({
       const popup = L.popup()
         .setLatLng([row.lat, row.lng])
         .setContent(
-          `<strong>${row.vehicleId}</strong><br/><strong>${this.formatDateTime(
+          `<strong>${row.displayLabel || row.vehicleId}</strong><br/><strong>${this.formatDateTime(
             row.timestampiso,
           )}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(
             row.lng,
             6,
-          )}<br/>Speed: ${this.formatSpeed(row.speed)}`,
+          )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ระยะจุดนี้: ${
+            row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
+          } m<br/>ระยะรวม: ${
+            row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"
+          } km`,
         );
       popup.openOn(mapInstance);
     },

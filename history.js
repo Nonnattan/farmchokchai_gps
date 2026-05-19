@@ -319,6 +319,8 @@ createApp({
             color: track.color,
             pointNo: p.pointNo ?? idx + 1,
             segmentMeters: p.segmentMeters ?? null,
+            cumulativeMeters: p.cumulativeMeters ?? null,
+            cumulativeKm: p.cumulativeKm ?? null,
           });
         });
       }
@@ -647,6 +649,8 @@ createApp({
           raw: value,
           pointNo: 0,
           segmentMeters: null,
+          cumulativeMeters: null,
+          cumulativeKm: null,
         });
       });
 
@@ -660,10 +664,13 @@ createApp({
         p.pointNo = idx + 1;
         if (idx === 0) {
           p.segmentMeters = 0;
+          p.cumulativeMeters = 0;
         } else {
           const prev = items[idx - 1];
           p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
         }
+        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
       });
 
       return items;
@@ -909,7 +916,6 @@ createApp({
       if (!rows.length) return;
 
       const headers = [
-        "#",
         "รถ",
         "vehicleId",
         "จุดที่",
@@ -919,14 +925,14 @@ createApp({
         "Speed(km/h)",
         "Accuracy(m)",
         "ระยะจุดนี้ (m)",
+        "ระยะรวม (km)",
       ];
 
       const csvLines = [headers.map(escapeCsv).join(",")];
 
-      rows.forEach((p, idx) => {
+      rows.forEach((p) => {
         csvLines.push(
           [
-            idx + 1,
             p.label,
             p.vehicleId,
             p.pointNo ?? "",
@@ -939,6 +945,7 @@ createApp({
               : "",
             p.accuracy ?? "",
             p.segmentMeters != null ? p.segmentMeters.toFixed(2) : "",
+            p.cumulativeKm != null ? p.cumulativeKm.toFixed(2) : "",
           ]
             .map(escapeCsv)
             .join(","),

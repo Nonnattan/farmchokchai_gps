@@ -124,7 +124,7 @@
                   class="legend-swatch"
                   :style="{ background: vehicle.color }"
                 ></span>
-                <span class="vehicle-id-text"> {{ vehicle.vehicleId }} </span>
+                <span class="vehicle-id-text"> {{ vehicle.displayLabel || vehicle.vehicleId }} </span>
               </div>
             </label>
           </div>
@@ -165,7 +165,7 @@
                 :style="{ background: vehicle.color }"
               ></span>
               <div>
-                <div class="track-title">{{ vehicle.vehicleId }}</div>
+                <div class="track-title">{{ vehicle.displayLabel || vehicle.vehicleId }}</div>
               </div>
               <button
                 class="btn secondary"
@@ -230,7 +230,7 @@
                   :key="v.vehicleId"
                   :value="v.vehicleId"
                 >
-                  {{ v.vehicleId }}
+                  {{ v.displayLabel || v.vehicleId }}
                 </option>
               </select>
             </div>
@@ -252,7 +252,6 @@
           <table>
             <thead>
               <tr>
-                <th>#</th>
                 <th>รถ</th>
                 <th>จุดที่</th>
                 <th>เวลา</th>
@@ -261,6 +260,7 @@
                 <th>Speed (km/h)</th>
                 <th>Acc</th>
                 <th>ระยะจุดนี้ (m)</th>
+                <th>ระยะรวม (km)</th>
                 <th></th>
               </tr>
             </thead>
@@ -270,14 +270,13 @@
                 v-for="(p, idx) in filteredPoints"
                 :key="p.vehicleId + '-' + p.key"
               >
-                <td>{{ idx + 1 }}</td>
                 <td>
                   <span class="badge-pill">
                     <span
                       class="legend-swatch"
                       :style="{ background: p.color }"
                     ></span>
-                    {{ p.vehicleId }}
+                    {{ p.displayLabel || p.vehicleId }}
                   </span>
                 </td>
                 <td>{{ p.pointNo ?? ('จุดที่ ' + (idx + 1)) }}</td>
@@ -290,6 +289,10 @@
                 <td>{{ formatAccuracy(p.accuracy) }}</td>
                 <td>
                   {{ p.segmentMeters != null ? p.segmentMeters.toFixed(2) : '-'
+                  }}
+                </td>
+                <td>
+                  {{ p.cumulativeKm != null ? p.cumulativeKm.toFixed(2) : '-'
                   }}
                 </td>
                 <td>
