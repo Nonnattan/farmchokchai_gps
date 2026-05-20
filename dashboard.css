@@ -97,7 +97,8 @@ body.nav-open {
 }
 
 .summary-table-wrap {
-  overflow-x: auto;
+  max-height: clamp(320px, 50vh, 560px);
+  overflow: auto;
   border-radius: 18px;
   border: 1px solid var(--border);
   background: #fff;
@@ -118,6 +119,9 @@ body.nav-open {
 }
 
 .summary-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: #f8fbff;
   color: var(--muted);
   font-size: 13px;

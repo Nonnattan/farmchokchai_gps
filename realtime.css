@@ -263,6 +263,13 @@ flex-shrink: 0;
 /* --- Table Card & Filters --- */
 .table-card {
   padding: 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-wrap {
+  min-height: 0;
 }
 
 .table-head {
@@ -319,22 +326,27 @@ flex-shrink: 0;
 }
 
 .table-scroll {
-  overflow-x: auto;
+  max-height: clamp(360px, 58vh, 640px);
+  overflow: auto;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 980px;
+  min-width: 1180px;
 }
 
 thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 12px 10px;
   text-align: left;
   font-size: 13px;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  background: #fff;
 }
 
 tbody td {
@@ -385,6 +397,9 @@ tbody tr:hover {
 
 /* --- Responsive --- */
 @media (max-width: 1180px) {
+  .table-scroll {
+    max-height: 60vh;
+  }
   .vehicle-summary-list {
     grid-template-columns: repeat(3, 1fr);
     /* จอเล็กลงให้เหลือ 3 แถว */

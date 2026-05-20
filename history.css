@@ -361,7 +361,18 @@ input[type="number"]:focus {
   width: 100%;
 }
 
+.table-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-wrap {
+  min-height: 0;
+}
+
 .table-scroll {
+  max-height: clamp(360px, 58vh, 640px);
   overflow: auto;
   border-radius: 18px;
   border: 1px solid var(--border);
@@ -390,6 +401,10 @@ input[type="number"]:focus {
   background: #f8fbff;
   font-weight: 900;
   color: var(--muted);
+}
+
+.table-scroll table {
+  min-width: 1180px;
 }
 
 .table-scroll tbody tr:hover {
