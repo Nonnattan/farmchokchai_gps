@@ -692,3 +692,54 @@ input[type="number"]:focus {
 .table-card td {
   border-color: var(--border);
 }
+
+
+/* Mobile map-first layout: keep actions and summary cards in one row */
+@media (max-width: 720px) {
+  .actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .actions .btn {
+    flex: 0 0 auto;
+    min-width: max-content;
+    white-space: nowrap;
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
+  .mini-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mini-stat {
+    padding: 12px 10px;
+  }
+
+  .mini-stat span {
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  .mini-stat strong {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .map-wrap,
+  #map {
+    min-height: 360px;
+  }
+}

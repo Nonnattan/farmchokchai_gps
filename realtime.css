@@ -564,3 +564,45 @@ tbody tr:hover {
     white-space: normal;
   }
 }
+
+
+/* Mobile map-first layout: keep top buttons and summary cards in one row */
+@media (max-width: 720px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .topbar .btn {
+    width: 100%;
+    min-height: 40px;
+    padding: 0 10px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .mini-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mini-stat {
+    padding: 12px 10px;
+  }
+
+  .mini-stat span {
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
+  .mini-stat strong {
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  .map-wrap,
+  #map {
+    min-height: 360px;
+  }
+}
