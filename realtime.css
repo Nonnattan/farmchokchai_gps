@@ -175,6 +175,20 @@ body.nav-open {
   border-radius: inherit;
 }
 
+.card.map-wrap {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.card.map-wrap #map,
+.map-wrap #map {
+  border-radius: 0;
+}
+
+
 /* --- Vehicle Summary List (อัปเดตให้แสดงแถวละ 4 Card) --- */
 .vehicle-summary-list {
   display: grid;
@@ -423,7 +437,20 @@ tbody tr:hover {
 }
 
 @media (max-width: 720px) {
-  .hero h1 {
+  
+  .card.map-wrap {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .card.map-wrap #map,
+  .map-wrap #map {
+    border-radius: 0;
+  }
+.hero h1 {
     font-size: 22px;
   }
 
@@ -485,8 +512,26 @@ tbody tr:hover {
     min-width: 0;
   }
 
+  .pill-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 8px;
+  }
+
+  .pill-row .btn {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
   .actions.compact {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .vehicle-row,
@@ -523,6 +568,22 @@ tbody tr:hover {
     width: 100%;
   }
 
+  .pill-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 8px;
+  }
+
+  .pill-row .btn {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
   .controls-card,
   .table-card {
     padding: 14px;
@@ -556,9 +617,6 @@ tbody tr:hover {
     flex-wrap: wrap;
   }
 
-  .pill-row {
-    flex-wrap: wrap;
-  }
 
   .badge-pill {
     white-space: normal;
@@ -605,4 +663,12 @@ tbody tr:hover {
   #map {
     min-height: 360px;
   }
+}
+
+
+.route-polyline {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: geometricPrecision;
 }

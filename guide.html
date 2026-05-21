@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3f6fb" />
+    <title>คู่มือระบบ | Farm Chokchai GPS</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="nav.css" />
+    <link rel="stylesheet" href="guide.css" />
+  </head>
+  <body>
+    <nav class="site-nav">
+      <div class="site-nav__bar">
+        <button class="site-nav__toggle" type="button" aria-label="เปิดเมนู" aria-expanded="false" data-nav-toggle>☰</button>
+
+        <a href="dashboard.html" class="site-nav__brand">
+          <span class="site-nav__logo">🚚</span>
+          <span class="site-nav__title">
+            <strong>Farm Chokchai GPS</strong>
+            <span>คู่มือระบบและคำอธิบายสถานะ</span>
+          </span>
+        </a>
+
+        <div class="site-nav__links site-nav__links--desktop" aria-label="เมนูหลัก">
+          <a href="dashboard.html" class="site-nav__link">Dashboard</a>
+          <a href="realtime.html" class="site-nav__link">Realtime</a>
+          <a href="history.html" class="site-nav__link">History</a>
+          <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+          <a href="guide.html" class="site-nav__link">คู่มือระบบ</a>
+        </div>
+      </div>
+    </nav>
+
+    <div class="site-nav__backdrop" data-nav-backdrop></div>
+
+    <aside class="site-nav__drawer" data-nav-drawer>
+      <div class="site-nav__drawer-head">
+        <div class="site-nav__drawer-logo">🚚</div>
+        <div class="site-nav__drawer-title">
+          <strong>Farm Chokchai GPS</strong>
+          <span>เลือกหน้าได้จากเมนูนี้</span>
+        </div>
+      </div>
+
+      <div class="site-nav__links">
+        <a href="dashboard.html" class="site-nav__link">Dashboard</a>
+        <a href="realtime.html" class="site-nav__link">Realtime</a>
+        <a href="history.html" class="site-nav__link">History</a>
+        <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+        <a href="guide.html" class="site-nav__link">คู่มือระบบ</a>
+      </div>
+
+      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
+    </aside>
+
+    <main class="app guide-app">
+      <header class="card guide-hero">
+        <div class="hero-badge">System Guide</div>
+        <h1>คู่มือระบบสำหรับผู้ใช้</h1>
+        <p class="subtitle">
+          หน้านี้สรุปสาเหตุที่อาจทำให้เส้นบนแผนที่ขาดหาย ตำแหน่งอาจคลาดเคลื่อน และวิธีอ่านค่า ACC ให้เข้าใจง่าย
+        </p>
+        <div class="guide-hero__links">
+          <a href="dashboard.html" class="guide-chip">กลับไป Dashboard</a>
+          <a href="realtime.html" class="guide-chip">ดู Realtime</a>
+          <a href="history.html" class="guide-chip">ดู History</a>
+        </div>
+      </header>
+
+      <section class="guide-grid">
+        <article class="card guide-panel">
+          <h2>เส้นที่ขาดหายไป</h2>
+          <p class="guide-intro">
+            ถ้าเส้น polyline บนแผนที่ขาดหายหรือข้ามช่วง อาจเกิดจากสาเหตุด้านสัญญาณหรืออุปกรณ์ดังนี้
+          </p>
+          <ul class="guide-list">
+            <li><strong>สัญญาณอินเตอร์เน็ตขาดหาย</strong> — ระบบส่งตำแหน่งขึ้นเซิร์ฟเวอร์ไม่ได้ชั่วคราว</li>
+            <li><strong>สัญญาณดาวเทียมขาดหาย</strong> — ตำแหน่งจาก GPS ไม่ต่อเนื่อง ทำให้เกิดช่วงว่าง</li>
+            <li><strong>การเชื่อมสายสัญญาณบกพร่อง</strong> — สายหรือหัวต่อมีปัญหา ทำให้ข้อมูลเข้าไม่ครบ</li>
+            <li><strong>ไม่มีกระแสไฟเข้าไปเลี้ยงบอร์ด</strong> — อุปกรณ์หยุดทำงานและไม่ส่งข้อมูล</li>
+          </ul>
+        </article>
+
+        <article class="card guide-panel">
+          <h2>ทำไมจุด polyline อาจไม่ตรงตำแหน่งจริง</h2>
+          <p class="guide-intro">
+            บางกรณีรถอาจอยู่ในพื้นที่ที่สัญญาณไม่ดี เช่น ลานจอดรถ, โรงจอด, หรือชั้นใต้ดิน ทำให้ตำแหน่งที่แสดงบนแผนที่คลาดเคลื่อนจากจุดจริงได้
+          </p>
+          <div class="guide-note">
+            โดยทั่วไปให้ดูค่าจาก <strong>ACC</strong> ร่วมด้วย เพราะยิ่งค่าน้อย ตำแหน่งยิ่งแม่น
+          </div>
+        </article>
+      </section>
+
+      <section class="card guide-panel">
+        <div class="guide-panel__head">
+          <div>
+            <h2>วิธีอ่านค่า ACC</h2>
+            <p class="guide-intro">ACC คือค่าความแม่นยำของตำแหน่งที่ระบบรับมา ใช้อ่านประกอบการดูจุดบนแผนที่</p>
+          </div>
+          <div class="guide-badge">ยิ่งน้อยยิ่งแม่น</div>
+        </div>
+
+        <div class="accuracy-table" role="table" aria-label="ตารางความแม่นยำของ ACC">
+          <div class="accuracy-row accuracy-row--head" role="row">
+            <div role="columnheader">ช่วงค่า ACC</div>
+            <div role="columnheader">ความหมายสำหรับผู้ใช้</div>
+          </div>
+          <div class="accuracy-row" role="row"><div role="cell">0 – 3 m</div><div role="cell">ดีมาก / แม่นมาก</div></div>
+          <div class="accuracy-row" role="row"><div role="cell">4 – 10 m</div><div role="cell">ดี</div></div>
+          <div class="accuracy-row" role="row"><div role="cell">11 – 20 m</div><div role="cell">ปานกลาง</div></div>
+          <div class="accuracy-row" role="row"><div role="cell">21 – 50 m</div><div role="cell">ต่ำ</div></div>
+          <div class="accuracy-row" role="row"><div role="cell">51 – 100 m</div><div role="cell">ไม่แม่น</div></div>
+          <div class="accuracy-row" role="row"><div role="cell">มากกว่า 100 m</div><div role="cell">แย่มาก</div></div>
+        </div>
+      </section>
+
+      <section class="guide-grid guide-grid--two">
+        <article class="card guide-panel">
+          <h2>คำแนะนำการใช้งาน</h2>
+          <ul class="guide-list">
+            <li>ถ้ารถอยู่ในอาคารหรือใต้ดิน ให้เช็ก ACC ก่อนเชื่อข้อมูลตำแหน่ง</li>
+            <li>ถ้าเส้นขาดหายหลายช่วง ให้ตรวจอินเตอร์เน็ต, สายสัญญาณ และไฟเลี้ยงบอร์ด</li>
+            <li>ถ้าค่า ACC สูงมาก ตำแหน่งบนแผนที่อาจคลาดเคลื่อนได้มากกว่าปกติ</li>
+          </ul>
+        </article>
+
+        <article class="card guide-panel guide-panel--highlight">
+          <h2>สรุปสั้น ๆ</h2>
+          <p class="guide-summary">
+            ถ้าอยากดูว่ารถแม่นแค่ไหน ให้ดูที่ <strong>ACC</strong> เป็นหลัก: ค่ายิ่งต่ำยิ่งดี และหากเส้นขาดหายให้ตรวจสัญญาณอินเตอร์เน็ต, GPS, สายสัญญาณ และไฟเลี้ยงบอร์ดตามลำดับ
+          </p>
+        </article>
+      </section>
+    </main>
+
+    <script src="nav.js"></script>
+  </body>
+</html>

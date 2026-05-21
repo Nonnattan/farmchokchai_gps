@@ -14,50 +14,55 @@
   </head>
   <body>
     <nav class="site-nav">
-      <div class="site-nav__bar">
-        <button
-          class="site-nav__toggle"
-          type="button"
-          aria-label="เปิดเมนู"
-          aria-expanded="false"
-          data-nav-toggle
-        >
-          ☰
-        </button>
+  <div class="site-nav__bar">
+    <button
+      class="site-nav__toggle"
+      type="button"
+      aria-label="เปิดเมนู"
+      aria-expanded="false"
+      data-nav-toggle
+    >
+      ☰
+    </button>
 
-        <a href="index.html" class="site-nav__brand">
-          <span class="site-nav__logo">🚚</span>
-          <span class="site-nav__title">
-            <strong>Farm Chokchai GPS</strong>
-            <span>Realtime & History</span>
-          </span>
-        </a>
+    <a href="dashboard.html" class="site-nav__brand">
+      <span class="site-nav__logo">🚚</span>
+      <span class="site-nav__title">
+        <strong>Farm Chokchai GPS</strong>
+        <span>Realtime & History</span>
+      </span>
+    </a>
 
-        <span class="site-nav__hint">กดเมนูด้านซ้าย</span>
-      </div>
-    </nav>
+    <div class="site-nav__links site-nav__links--desktop" aria-label="เมนูหลัก">
+      <a href="dashboard.html" class="site-nav__link">Dashboard</a>
+      <a href="realtime.html" class="site-nav__link">Realtime</a>
+      <a href="history.html" class="site-nav__link">History</a>
+      <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+      <a href="guide.html" class="site-nav__link">คู่มือระบบ</a>
+    </div>
+  </div>
+</nav>
 
-    <div class="site-nav__backdrop" data-nav-backdrop></div>
+<div class="site-nav__backdrop" data-nav-backdrop></div>
 
-    <aside class="site-nav__drawer" data-nav-drawer>
-      <div class="site-nav__drawer-head">
-        <div class="site-nav__drawer-logo">🚚</div>
-        <div class="site-nav__drawer-title">
-          <strong>Farm Chokchai GPS</strong>
-          <span>เลือกหน้าได้จากเมนูนี้</span>
-        </div>
-      </div>
+<aside class="site-nav__drawer" data-nav-drawer>
+  <div class="site-nav__drawer-head">
+    <div class="site-nav__drawer-logo">🚚</div>
+    <div class="site-nav__drawer-title">
+      <strong>Farm Chokchai GPS</strong>
+      <span>เลือกหน้าได้จากเมนูนี้</span>
+    </div>
+  </div>
 
-      <div class="site-nav__links">
-        <a href="index.html" class="site-nav__link">Home</a>
-        <a href="realtime.html" class="site-nav__link">Realtime</a>
-        <a href="history.html" class="site-nav__link">History</a>
-        <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
-        <a href="dashboard.html" class="site-nav__link">dashboard</a>
-      </div>
+  <div class="site-nav__links">
+    <a href="dashboard.html" class="site-nav__link">Dashboard</a>
+    <a href="realtime.html" class="site-nav__link">Realtime</a>
+    <a href="history.html" class="site-nav__link">History</a>
+    <a href="vehicle-mapping.html" class="site-nav__link">ตั้งค่ารถ</a>
+  </div>
 
-      <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
-    </aside>
+  <div class="site-nav__footer">แตะพื้นหลังนอกเมนูหรือกด Esc เพื่อปิด</div>
+</aside>
 
     <div id="app" class="app settings-app">
       <header class="hero card">

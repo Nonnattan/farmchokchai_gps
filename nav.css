@@ -30,6 +30,10 @@
   color: #0f172a;
   font-size: 20px;
   box-shadow: var(--shadow-sm);
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .site-nav__brand {
@@ -39,6 +43,7 @@
   text-decoration: none;
   min-width: 0;
   color: var(--text);
+  flex: 1 1 auto;
 }
 
 .site-nav__logo,
@@ -184,5 +189,37 @@ body.nav-open {
 
   .site-nav__bar {
     padding: 10px;
+  }
+}
+
+
+.site-nav__links--desktop {
+  display: none;
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.site-nav__links--desktop .site-nav__link {
+  min-height: 40px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(248, 251, 255, 0.9);
+}
+
+@media (min-width: 981px) {
+  .site-nav__links--desktop {
+    display: flex;
+  }
+}
+
+
+@media (min-width: 981px) {
+  .site-nav__drawer.is-open,
+  .site-nav__backdrop.is-open {
+    display: block;
   }
 }

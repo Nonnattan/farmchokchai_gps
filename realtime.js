@@ -2,8 +2,10 @@ const { createApp } = Vue;
 
 let firebaseDb = null;
 let mapInstance = null;
+let mapCanvasRenderer = null;
 let routeLayers = [];
 let pointLayers = [];
+let vehicleLayerStates = Object.create(null);
 let liveRef = null;
 let liveCallback = null;
 
@@ -90,6 +92,10 @@ createApp({
       lastRefreshAt: null,
       mapReady: false,
       resizeHandler: null,
+      renderPending: false,
+      renderTimer: null,
+      renderNeedsFit: false,
+      initialAutoFitDone: false,
 
       // ตัวกรองในตาราง
       filterVehicle: "",
@@ -220,12 +226,12 @@ createApp({
   },
   watch: {
     gapMinutesInput() {
-      this.renderRoute();
+      this.scheduleRenderRoute();
     },
     visibleVehicles: {
       deep: true,
       handler() {
-        this.renderRoute();
+        this.scheduleRenderRoute();
       },
     },
   },
@@ -312,7 +318,12 @@ createApp({
     initMap() {
       if (mapInstance) return;
 
-      mapInstance = L.map("map", { zoomControl: true }).setView([13.736717, 100.523186], 6);
+      mapCanvasRenderer = L.canvas({ padding: 0.5 });
+      mapInstance = L.map("map", {
+        zoomControl: true,
+        preferCanvas: true,
+        updateWhenIdle: true,
+      }).setView([13.736717, 100.523186], 6);
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution:
@@ -323,12 +334,245 @@ createApp({
       this.mapReady = true;
       setTimeout(() => mapInstance.invalidateSize(), 100);
     },
-    resetMapLayers() {
+    clearAllMapLayers() {
       if (!mapInstance) return;
+
+      Object.keys(vehicleLayerStates).forEach((vehicleId) => {
+        const state = vehicleLayerStates[vehicleId];
+        if (state?.group) {
+          try {
+            state.group.remove();
+          } catch (err) {
+            console.warn(err);
+          }
+        }
+      });
+
+      vehicleLayerStates = Object.create(null);
       routeLayers.forEach((layer) => layer.remove());
       routeLayers = [];
       pointLayers.forEach((layer) => layer.remove());
       pointLayers = [];
+    },
+    removeVehicleLayer(vehicleId) {
+      const state = vehicleLayerStates[vehicleId];
+      if (!state) return;
+
+      if (state.group) {
+        try {
+          state.group.remove();
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+
+      delete vehicleLayerStates[vehicleId];
+    },
+    createVehicleLayerState() {
+      return {
+        group: L.layerGroup().addTo(mapInstance),
+        points: [],
+        lastPoint: null,
+        tailPolyline: null,
+        latestMarker: null,
+      };
+    },
+    pointsMatch(a, b) {
+      if (!a || !b) return false;
+      if (a.key && b.key) return a.key === b.key;
+      return (
+        a.timestampiso === b.timestampiso &&
+        a.lat === b.lat &&
+        a.lng === b.lng
+      );
+    },
+    pointsHaveSamePrefix(prevPoints, nextPoints) {
+      if (!Array.isArray(prevPoints) || !Array.isArray(nextPoints)) return false;
+      if (prevPoints.length > nextPoints.length) return false;
+
+      for (let i = 0; i < prevPoints.length; i += 1) {
+        if (!this.pointsMatch(prevPoints[i], nextPoints[i])) return false;
+      }
+
+      return true;
+    },
+    buildPointPopupContent(vehicle, point) {
+      return `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(
+        point.timestampiso,
+      )}<br>Lat ${formatNum(point.lat, 6)}<br>Lng ${formatNum(point.lng, 6)}<br>Speed ${this.formatSpeed(
+        point.speed,
+      )}<br>ACC ${this.formatAccuracy(point.accuracy)}<br>ระยะจุดนี้: ${point.segmentMeters != null ? point.segmentMeters.toFixed(2) : '-'} m<br>ระยะรวม: ${point.cumulativeKm != null ? point.cumulativeKm.toFixed(2) : '-'} km`;
+    },
+    addPointDot(state, vehicle, point) {
+      const dot = L.circleMarker([point.lat, point.lng], {
+        radius: 5,
+        color: vehicle.color,
+        fillColor: vehicle.color,
+        fillOpacity: 0.95,
+        weight: 0,
+        opacity: 1,
+        renderer: mapCanvasRenderer,
+        interactive: true,
+      })
+        .addTo(state.group)
+        .bindPopup(this.buildPointPopupContent(vehicle, point), {
+          autoPan: true,
+          closeButton: true,
+        });
+
+      dot.on("click", () => {
+        try {
+          dot.openPopup();
+        } catch (err) {
+          console.warn(err);
+        }
+      });
+
+      return dot;
+    },
+    addPolylineSegment(state, vehicle, startPoint, endPoint) {
+      const polyline = L.polyline(
+        [
+          [startPoint.lat, startPoint.lng],
+          [endPoint.lat, endPoint.lng],
+        ],
+        {
+          color: vehicle.color,
+          weight: 5,
+          opacity: 0.95,
+          lineCap: "round",
+          lineJoin: "round",
+          smoothFactor: 1.2,
+          renderer: mapCanvasRenderer,
+          className: "route-polyline",
+          interactive: false,
+        },
+      ).addTo(state.group);
+
+      state.tailPolyline = polyline;
+      return polyline;
+    },
+    appendPointToState(state, vehicle, point) {
+      this.addPointDot(state, vehicle, point);
+
+      if (state.lastPoint && state.lastPoint.date && point.date) {
+        const gapMs = point.date.getTime() - state.lastPoint.date.getTime();
+        if (gapMs > this.gapThresholdMs) {
+          state.tailPolyline = null;
+        } else if (!state.tailPolyline) {
+          this.addPolylineSegment(state, vehicle, state.lastPoint, point);
+        } else {
+          state.tailPolyline.addLatLng([point.lat, point.lng]);
+        }
+      }
+
+      state.lastPoint = point;
+    },
+    updateLatestMarker(state, vehicle, latest) {
+      if (state.latestMarker) {
+        try {
+          state.latestMarker.remove();
+        } catch (err) {
+          console.warn(err);
+        }
+        state.latestMarker = null;
+      }
+
+      if (!latest) return;
+
+      const latestMarker = L.circleMarker([latest.lat, latest.lng], {
+        radius: 9,
+        color: vehicle.color,
+        fillColor: vehicle.color,
+        fillOpacity: 1,
+        weight: 1,
+        opacity: 1,
+        renderer: mapCanvasRenderer,
+        interactive: true,
+      })
+        .addTo(state.group)
+        .bindPopup(this.buildPointPopupContent(vehicle, latest), {
+          autoPan: true,
+          closeButton: true,
+        });
+
+      latestMarker.on("click", () => {
+        try {
+          latestMarker.openPopup();
+        } catch (err) {
+          console.warn(err);
+        }
+      });
+
+      try {
+        latestMarker.bringToFront();
+      } catch (err) {
+        console.warn(err);
+      }
+
+      state.latestMarker = latestMarker;
+    },
+    syncVehicleLayer(vehicle) {
+      if (!mapInstance) this.initMap();
+
+      const vehicleId = vehicle.vehicleId;
+      const nextPoints = vehicle.points || [];
+      let state = vehicleLayerStates[vehicleId];
+
+      if (!state) {
+        state = vehicleLayerStates[vehicleId] = this.createVehicleLayerState();
+      } else if (state.group && !mapInstance.hasLayer(state.group)) {
+        state.group.addTo(mapInstance);
+      }
+
+      const needsRebuild =
+        !this.pointsHaveSamePrefix(state.points, nextPoints) ||
+        nextPoints.length < state.points.length;
+
+      if (needsRebuild) {
+        try {
+          state.group.clearLayers();
+        } catch (err) {
+          console.warn(err);
+        }
+        state.lastPoint = null;
+        state.tailPolyline = null;
+        state.latestMarker = null;
+
+        nextPoints.forEach((point) => {
+          this.appendPointToState(state, vehicle, point);
+        });
+      } else {
+        for (let i = state.points.length; i < nextPoints.length; i += 1) {
+          this.appendPointToState(state, vehicle, nextPoints[i]);
+        }
+      }
+
+      state.points = nextPoints.slice();
+      this.updateLatestMarker(state, vehicle, nextPoints[nextPoints.length - 1] || null);
+
+      return state;
+    },
+    renderLiveMap({ fitBounds = false } = {}) {
+      if (!mapInstance) this.initMap();
+
+      const summaries = this.visibleVehicleSummaries;
+      const activeIds = new Set(summaries.map((v) => v.vehicleId));
+
+      Object.keys(vehicleLayerStates).forEach((vehicleId) => {
+        if (!activeIds.has(vehicleId)) {
+          this.removeVehicleLayer(vehicleId);
+        }
+      });
+
+      summaries.forEach((vehicle) => {
+        this.syncVehicleLayer(vehicle);
+      });
+
+      if (fitBounds && !this.initialAutoFitDone) {
+        this.fitToRoute();
+        this.initialAutoFitDone = true;
+      }
     },
     buildSegments(points) {
       const pts = points || [];
@@ -369,6 +613,25 @@ createApp({
       }
       return sum / 1000;
     },
+
+    simplifyPointsForRender(points, maxPoints = 200) {
+      const pts = points || [];
+      if (pts.length <= maxPoints) return pts;
+
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      const innerTarget = Math.max(0, maxPoints - 2);
+      const step = Math.max(1, Math.ceil((pts.length - 2) / innerTarget));
+
+      const sampled = [first];
+      for (let i = 1; i < pts.length - 1; i += step) {
+        sampled.push(pts[i]);
+      }
+
+      if (sampled[sampled.length - 1] !== last) sampled.push(last);
+      return sampled;
+    },
+
     parseVehicleSnapshot(vehicleSnapshot) {
       const points = [];
       const { start, end } = getTodayBounds();
@@ -477,7 +740,7 @@ createApp({
         });
 
         this.lastRefreshAt = new Date().toISOString();
-        this.renderRoute();
+        this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
         this.loading = false;
 
         const count = Object.keys(result).length;
@@ -495,114 +758,25 @@ createApp({
       this.vehicleSummaries.forEach((v) => {
         this.visibleVehicles[v.vehicleId] = show;
       });
-      this.renderRoute();
+      this.scheduleRenderRoute();
     },
-    renderRoute() {
-      this.resetMapLayers();
-      if (!mapInstance) this.initMap();
+    scheduleRenderRoute({ fitBounds = false } = {}) {
+      this.renderNeedsFit = this.renderNeedsFit || fitBounds;
 
-      const summaries = this.visibleVehicleSummaries;
-      const totalPoints = summaries.reduce((sum, v) => sum + v.points.length, 0);
+      if (this.renderTimer) {
+        clearTimeout(this.renderTimer);
+      }
 
-      if (!totalPoints) return;
-
-      summaries.forEach((vehicle) => {
-        const pts = vehicle.points;
-        const segments = vehicle.segments;
-        const color = vehicle.color;
-
-        if (!pts.length) return;
-
-        if (pts.length === 1) {
-          const p = pts[0];
-          const marker = L.circleMarker([p.lat, p.lng], {
-            radius: 8,
-            color,
-            fillColor: color,
-            fillOpacity: 0.9,
-            weight: 3,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(p.timestampiso)}<br>Lat ${formatNum(
-                p.lat,
-                6,
-              )}<br>Lng ${formatNum(p.lng, 6)}<br>Speed ${this.formatSpeed(p.speed)}`,
-            );
-          pointLayers.push(marker);
-          return;
-        }
-
-        segments.forEach((segment, segIndex) => {
-          if (!segment.length) return;
-
-          if (segment.length >= 2) {
-            const latlngs = segment.map((p) => [p.lat, p.lng]);
-            const polyline = L.polyline(latlngs, {
-              color,
-              weight: 5,
-              opacity: 0.95,
-              lineCap: "round",
-              lineJoin: "round",
-            }).addTo(mapInstance);
-            routeLayers.push(polyline);
-          }
-
-          const start = segment[0];
-          const end = segment[segment.length - 1];
-
-          const startMarker = L.circleMarker([start.lat, start.lng], {
-            radius: 8,
-            color,
-            fillColor: color,
-            fillOpacity: 0.9,
-            weight: 3,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1}<br>${this.formatDateTime(
-                start.timestampiso,
-              )}`,
-            );
-
-          const endMarker = L.circleMarker([end.lat, end.lng], {
-            radius: 8,
-            color,
-            fillColor: color,
-            fillOpacity: 0.95,
-            weight: 3,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1}<br>${this.formatDateTime(
-                end.timestampiso,
-              )}`,
-            );
-
-          pointLayers.push(startMarker, endMarker);
-
-          segment.forEach((p, idx) => {
-            if (idx === 0 || idx === segment.length - 1) return;
-            const marker = L.circleMarker([p.lat, p.lng], {
-              radius: 5,
-              color: "#e2e8f0",
-              fillColor: color,
-              fillOpacity: 0.75,
-              weight: 2,
-            })
-              .addTo(mapInstance)
-              .bindPopup(
-                `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(
-                  p.timestampiso,
-                )}<br>Speed ${this.formatSpeed(p.speed)}`,
-              );
-            pointLayers.push(marker);
-          });
-        });
-      });
-
-      this.fitToRoute();
+      this.renderPending = true;
+      this.renderTimer = setTimeout(() => {
+        this.renderTimer = null;
+        this.renderPending = false;
+        const doFit = this.renderNeedsFit;
+        this.renderNeedsFit = false;
+        this.renderLiveMap({ fitBounds: doFit });
+      }, 80);
     },
+
     fitToRoute() {
       if (!mapInstance || !this.visiblePoints.length) return;
       const latlngs = this.visiblePoints.map((p) => [p.lat, p.lng]);
@@ -620,7 +794,7 @@ createApp({
           )}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(
             row.lng,
             6,
-          )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ระยะจุดนี้: ${
+          )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ACC: ${this.formatAccuracy(row.accuracy)}<br/>ระยะจุดนี้: ${
             row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
           } m<br/>ระยะรวม: ${
             row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"

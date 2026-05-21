@@ -50,6 +50,15 @@ function toDateSafe(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function isSameCalendarDay(a, b) {
+  if (!a || !b) return false;
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -97,6 +106,7 @@ function colorForId(vehicleId) {
   return COLORS[hash % COLORS.length];
 }
 
+
 function initNavbar() {
   const toggle = document.querySelector("[data-nav-toggle]");
   const drawer = document.querySelector("[data-nav-drawer]");
@@ -104,6 +114,13 @@ function initNavbar() {
   const links = document.querySelectorAll(".site-nav__link");
 
   if (!toggle || !drawer || !backdrop) return;
+
+  const page = (location.pathname.split("/").pop() || "index.html").toLowerCase();
+
+  links.forEach((link) => {
+    const href = (link.getAttribute("href") || "").toLowerCase();
+    if (href === page) link.classList.add("is-active");
+  });
 
   const setOpen = (open) => {
     drawer.classList.toggle("is-open", open);
@@ -130,6 +147,7 @@ function initNavbar() {
     if (window.innerWidth > 980) setOpen(false);
   });
 }
+
 
 initNavbar();
 
@@ -260,6 +278,7 @@ createApp({
           const filteredPoints = this.getFilteredPoints(rawPoints);
           const segments = this.buildSegments(filteredPoints);
           const distanceKm = this.distanceKmFromSegments(segments);
+          const distanceKmDisplay = Number(distanceKm.toFixed(2));
           const latest = filteredPoints.length
             ? filteredPoints[filteredPoints.length - 1]
             : null;
@@ -269,8 +288,8 @@ createApp({
             latest,
             pointCount: filteredPoints.length,
             segmentCount: segments.filter((s) => s.length >= 2).length,
-            distanceKm,
-            distanceText: `${distanceKm.toFixed(2)} km`,
+            distanceKm: distanceKmDisplay,
+            distanceText: `${distanceKmDisplay.toFixed(2)} km`,
             firstText: filteredPoints.length
               ? formatDateTime(filteredPoints[0].timestampiso)
               : "-",
@@ -321,6 +340,8 @@ createApp({
             segmentMeters: p.segmentMeters ?? null,
             cumulativeMeters: p.cumulativeMeters ?? null,
             cumulativeKm: p.cumulativeKm ?? null,
+            dailyDistanceKm: p.cumulativeKm ?? null,
+            dailyDistanceText: p.cumulativeKm != null ? `${p.cumulativeKm.toFixed(2)} km` : '-',
           });
         });
       }
@@ -334,15 +355,18 @@ createApp({
       return rows;
     },
 
+    latestVisiblePoint() {
+      return this.visibleAllFilteredPoints.length ? this.visibleAllFilteredPoints[0] : null;
+    },
+
     totalDistanceKm() {
-      return this.visibleTrackSummaries.reduce(
-        (sum, track) => sum + track.distanceKm,
-        0,
-      );
+      return Number(this.latestVisiblePoint?.cumulativeKm || 0);
     },
 
     totalDistanceText() {
-      return `${this.totalDistanceKm.toFixed(2)} km`;
+      return this.latestVisiblePoint && this.latestVisiblePoint.cumulativeKm != null
+        ? `${this.latestVisiblePoint.cumulativeKm.toFixed(2)} km`
+        : '-';
     },
 
     lastUpdatedText() {
@@ -587,8 +611,9 @@ createApp({
           prevTime !== null &&
           currTime !== null &&
           currTime - prevTime > this.gapThresholdMs;
+        const isNewDay = !isSameCalendarDay(prev.date, curr.date);
 
-        if (isGap) {
+        if (isGap || isNewDay) {
           if (current.length) segments.push(current);
           current = [curr];
         } else {
@@ -667,8 +692,14 @@ createApp({
           p.cumulativeMeters = 0;
         } else {
           const prev = items[idx - 1];
-          p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
-          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
+          const isNewDay = !isSameCalendarDay(prev.date, p.date);
+          if (isNewDay) {
+            p.segmentMeters = 0;
+            p.cumulativeMeters = 0;
+          } else {
+            p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+            p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
+          }
         }
         p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
       });
@@ -754,11 +785,12 @@ createApp({
         if (pts.length === 1) {
           const p = pts[0];
           const marker = L.circleMarker([p.lat, p.lng], {
-            radius: 8,
+            radius: 9,
             color,
             fillColor: color,
-            fillOpacity: 0.9,
-            weight: 3,
+            fillOpacity: 1,
+            weight: 0,
+            interactive: true,
           })
             .addTo(mapInstance)
             .bindPopup(
@@ -784,10 +816,12 @@ createApp({
             const latlngs = segment.map((p) => [p.lat, p.lng]);
             const polyline = L.polyline(latlngs, {
               color,
-              weight: 5,
-              opacity: 0.95,
+              weight: 6,
+              opacity: 1,
               lineCap: "round",
               lineJoin: "round",
+              className: "route-polyline",
+              interactive: false,
             }).addTo(mapInstance);
 
             routeLayers.push(polyline);
@@ -797,29 +831,31 @@ createApp({
           const end = segment[segment.length - 1];
 
           const startMarker = L.circleMarker([start.lat, start.lng], {
-            radius: 8,
+            radius: 9,
             color,
             fillColor: color,
-            fillOpacity: 0.9,
-            weight: 3,
+            fillOpacity: 1,
+            weight: 0,
+            interactive: true,
           })
             .addTo(mapInstance)
             .bindPopup(
               `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1
-              }<br>${formatDateTime(start.timestampiso)}`,
+              }<br>${formatDateTime(start.timestampiso)}<br>Speed ${this.formatSpeed(start.speed)}<br>Acc ${this.formatAccuracy(start.accuracy)}<br>ระยะจุดนี้ ${start.segmentMeters != null ? start.segmentMeters.toFixed(2) : "-"} m`,
             );
 
           const endMarker = L.circleMarker([end.lat, end.lng], {
-            radius: 8,
+            radius: 9,
             color,
             fillColor: color,
-            fillOpacity: 0.95,
-            weight: 3,
+            fillOpacity: 1,
+            weight: 0,
+            interactive: true,
           })
             .addTo(mapInstance)
             .bindPopup(
               `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1
-              }<br>${formatDateTime(end.timestampiso)}<br>ระยะจุดนี้ ${end.segmentMeters != null ? end.segmentMeters.toFixed(2) : "-"
+              }<br>${formatDateTime(end.timestampiso)}<br>Speed ${this.formatSpeed(end.speed)}<br>Acc ${this.formatAccuracy(end.accuracy)}<br>ระยะจุดนี้ ${end.segmentMeters != null ? end.segmentMeters.toFixed(2) : "-"
               } m`,
             );
 
@@ -829,11 +865,12 @@ createApp({
             if (idx === 0 || idx === segment.length - 1) return;
 
             const marker = L.circleMarker([p.lat, p.lng], {
-              radius: 5,
-              color: "#e2e8f0",
+              radius: 6,
+              color: color,
               fillColor: color,
-              fillOpacity: 0.75,
-              weight: 2,
+              fillOpacity: 0.9,
+              weight: 0,
+              interactive: true,
             })
               .addTo(mapInstance)
               .bindPopup(
@@ -902,10 +939,10 @@ createApp({
         )}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(
           row.lng,
           6,
-        )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>Acc: ${this.formatAccuracy(
+        )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ACC: ${this.formatAccuracy(
           row.accuracy,
         )}<br/>ระยะจุดนี้: ${row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
-        } m`,
+        } m<br/>ระยะวันนี้สะสม: ${row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"} km`,
       );
 
       popup.openOn(mapInstance);
@@ -925,7 +962,7 @@ createApp({
         "Speed(km/h)",
         "Accuracy(m)",
         "ระยะจุดนี้ (m)",
-        "ระยะรวม (km)",
+        "ระยะวันนี้สะสม (km)",
       ];
 
       const csvLines = [headers.map(escapeCsv).join(",")];

@@ -135,6 +135,8 @@ input[type="number"]:focus {
 
 .actions.compact {
   flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .btn {
@@ -228,6 +230,20 @@ input[type="number"]:focus {
   height: 100%;
   border-radius: inherit;
 }
+
+.card.map-wrap {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.card.map-wrap #map,
+.map-wrap #map {
+  border-radius: 0;
+}
+
 
 .track-cards {
   display: grid;
@@ -494,8 +510,32 @@ input[type="number"]:focus {
     flex: 1 1 100%;
   }
 
+  .actions.compact .btn {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: max-content;
+    white-space: nowrap;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
   .actions.compact {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .actions.compact::-webkit-scrollbar {
+    display: none;
+  }
+
+  .actions.compact .btn {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 13px;
   }
 
   .device-grid {
@@ -505,7 +545,20 @@ input[type="number"]:focus {
 
 @media (max-width: 720px) {
 
-  .controls,
+  
+  .card.map-wrap {
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .card.map-wrap #map,
+  .map-wrap #map {
+    border-radius: 0;
+  }
+.controls,
   .right-card,
   .table-card,
   .filter-card {
@@ -545,7 +598,22 @@ input[type="number"]:focus {
   }
 
   .actions.compact {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .actions.compact::-webkit-scrollbar {
+    display: none;
+  }
+
+  .actions.compact .btn {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 13px;
   }
 
   .table-head {
@@ -742,4 +810,12 @@ input[type="number"]:focus {
   #map {
     min-height: 360px;
   }
+}
+
+
+.route-polyline {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  shape-rendering: geometricPrecision;
 }
