@@ -8,6 +8,8 @@ let pointLayers = [];
 let vehicleLayerStates = Object.create(null);
 let liveRef = null;
 let liveCallback = null;
+let firebaseInfoRef = null;
+let firebaseInfoCallback = null;
 
 const COLORS = [
   "#38bdf8", "#f59e0b", "#22c55e", "#a855f7",
@@ -79,6 +81,10 @@ function getTodayBounds() {
   return { start, end };
 }
 
+function localDateKey(date = new Date()) {
+  return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join("-");
+}
+
 createApp({
   data() {
     return {
@@ -86,6 +92,7 @@ createApp({
       status: "กำลังรอข้อมูลรถวันนี้...",
       statusType: "info",
       gapMinutesInput: "10",
+      staleMinutesInput: "10",
       vehiclesById: {},
       visibleVehicles: {},
       vehicleMappings: {},
@@ -96,6 +103,21 @@ createApp({
       renderTimer: null,
       renderNeedsFit: false,
       initialAutoFitDone: false,
+      healthPulse: 0,
+      healthTimer: null,
+
+      // แจ้งเตือนเมื่อวันนี้ยังไม่มีข้อมูล
+      noDataToday: false,
+      noDataCheckedAt: null,
+      notificationSupported: typeof window !== "undefined" && "Notification" in window,
+      notificationPermission:
+        typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
+      noDataNotifiedFor: "",
+      staleNotifiedFor: "",
+      firebaseConnected: null,
+      firebaseLastError: "",
+      renderError: "",
+      lastSnapshotAt: null,
 
       // ตัวกรองในตาราง
       filterVehicle: "",
@@ -111,6 +133,13 @@ createApp({
     },
     gapThresholdMs() {
       return this.gapThresholdMinutes * 60 * 1000;
+    },
+    staleThresholdMinutes() {
+      const n = Number(this.staleMinutesInput);
+      return Number.isFinite(n) && n >= 0 ? n : 10;
+    },
+    staleThresholdMs() {
+      return this.staleThresholdMinutes * 60 * 1000;
     },
 
     vehicleLabelMap() {
@@ -223,6 +252,110 @@ createApp({
       if (!times.length) return "-";
       return this.formatDateTime(new Date(Math.max(...times)));
     },
+    latestDataTimestampMs() {
+      const times = this.vehicleSummaries
+        .map((v) => v.latestTime || 0)
+        .filter((n) => Number.isFinite(n) && n > 0);
+      return times.length ? Math.max(...times) : null;
+    },
+    latestDataAgeMs() {
+      this.healthPulse;
+      const ts = this.latestDataTimestampMs;
+      if (!ts) return null;
+      return Date.now() - ts;
+    },
+    healthState() {
+      const latestAgeMs = this.latestDataAgeMs;
+      const latestAgeMinutes = latestAgeMs == null ? null : latestAgeMs / 60000;
+      const latestAgeText =
+        latestAgeMs == null
+          ? "-"
+          : latestAgeMs < 1000
+            ? "ไม่ถึง 1 วิ"
+            : latestAgeMs < 60000
+              ? `${Math.max(1, Math.round(latestAgeMs / 1000))} วินาที`
+              : `${Math.round(latestAgeMinutes)} นาที`;
+
+      if (this.firebaseLastError) {
+        return {
+          kind: "firebase_error",
+          tone: "error",
+          title: "Firebase มีปัญหา",
+          detail: this.firebaseLastError,
+          source: "ฝั่ง Firebase",
+          action: "ตรวจ config, permission, rule และ network",
+          latestAgeText,
+          visible: true,
+        };
+      }
+
+      if (this.firebaseConnected === false) {
+        return {
+          kind: "firebase_offline",
+          tone: "error",
+          title: "Firebase หลุดการเชื่อมต่อ",
+          detail: "หน้าเว็บติดต่อ Realtime Database ไม่ได้ในขณะนี้",
+          source: "ฝั่ง Firebase / Network",
+          action: "ตรวจอินเทอร์เน็ต, Realtime Database และสิทธิ์เข้าถึง",
+          latestAgeText,
+          visible: true,
+        };
+      }
+
+      if (this.renderError) {
+        return {
+          kind: "front_error",
+          tone: "error",
+          title: "หน้า Front แสดงผลผิดพลาด",
+          detail: this.renderError,
+          source: "ฝั่ง Front-end",
+          action: "ตรวจไฟล์ JS, Leaflet และ DOM ของหน้า realtime",
+          latestAgeText,
+          visible: true,
+        };
+      }
+
+      if (latestAgeMs == null) {
+        return {
+          kind: "no_data",
+          tone: "warn",
+          title: "Firebase ตอบกลับแล้ว แต่ยังไม่มีข้อมูลวันนี้",
+          detail: "ยังไม่พบจุด GPS ของวันนี้จากอุปกรณ์หรือ backend ที่ส่งขึ้น Firebase",
+          source: "ฝั่งอุปกรณ์ / uploader / backend",
+          action: "ตรวจอุปกรณ์ที่ส่งข้อมูลทุก 5 วินาที และ path locations ใน Firebase",
+          latestAgeText,
+          visible: true,
+        };
+      }
+
+      if (latestAgeMs >= this.staleThresholdMs) {
+        return {
+          kind: "stale",
+          tone: "warn",
+          title: `ข้อมูลล่าสุดห่างเกิน ${this.staleThresholdMinutes} นาที`,
+          detail: `Firebase ยังอ่านได้ปกติ แต่ไม่มีข้อมูลใหม่เข้ามา ${latestAgeText}`,
+          source: "ฝั่งอุปกรณ์ / uploader / network",
+          action: "ตรวจเครื่องส่งข้อมูล, สัญญาณ, และ backend ที่บันทึกเข้า Firebase",
+          latestAgeText,
+          visible: true,
+        };
+      }
+
+      return {
+        kind: "ok",
+        tone: "ok",
+        title: "ข้อมูลกำลังไหลปกติ",
+        detail: `ข้อมูลล่าสุดเมื่อ ${latestAgeText} ที่ผ่านมา`,
+        source: "Firebase + Front ปกติ",
+        action: "",
+        latestAgeText,
+        visible: false,
+      };
+    },
+    noDataBannerText() {
+      if (!this.noDataToday) return "";
+      return "วันนี้ยังไม่มีข้อมูล GPS เข้าระบบ";
+    },
   },
   watch: {
     gapMinutesInput() {
@@ -243,6 +376,122 @@ createApp({
     setStatus(text, type = "info") {
       this.status = text;
       this.statusType = type;
+    },
+    formatDuration(ms) {
+      if (ms == null || !Number.isFinite(ms) || ms < 0) return "-";
+      if (ms < 1000) return "น้อยกว่า 1 วิ";
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes <= 0) return `${seconds} วินาที`;
+      if (seconds === 0) return `${minutes} นาที`;
+      return `${minutes} นาที ${seconds} วินาที`;
+    },
+    async enableBrowserNotification() {
+      if (!this.notificationSupported) {
+        this.setStatus("เบราว์เซอร์นี้ไม่รองรับ Notification", "warn");
+        return false;
+      }
+
+      try {
+        const permission = await Notification.requestPermission();
+        this.notificationPermission = permission;
+        if (permission === "granted") {
+          this.setStatus("เปิดการแจ้งเตือนบนเบราว์เซอร์แล้ว", "ok");
+          this.refreshHealthState(true);
+          return true;
+        }
+
+        this.setStatus("ยังไม่ได้อนุญาตการแจ้งเตือนบนเบราว์เซอร์", "warn");
+        return false;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`ขออนุญาตแจ้งเตือนไม่สำเร็จ: ${err.message || err}`, "warn");
+        return false;
+      }
+    },
+    updateNoDataState(count) {
+      const key = localDateKey();
+      this.noDataToday = count === 0;
+      this.noDataCheckedAt = new Date().toISOString();
+
+      if (!this.noDataToday) {
+        this.noDataNotifiedFor = "";
+        return;
+      }
+
+      this.setStatus("วันนี้ยังไม่มีข้อมูล GPS เข้าระบบ", "warn");
+      this.maybeNotifyNoData(false, key);
+    },
+    maybeNotifyNoData(force = false, key = localDateKey()) {
+      if (!this.noDataToday) return;
+
+      if (!force && this.noDataNotifiedFor === key) return;
+
+      if (!this.notificationSupported || this.notificationPermission !== "granted") {
+        return;
+      }
+
+      try {
+        const body = "ขณะนี้ยังไม่มีข้อมูลรถส่งเข้าระบบในวันนี้";
+        new Notification("Farm Chokchai GPS", {
+          body,
+          tag: `farmchokchai-no-data-${key}`,
+          renotify: false,
+        });
+        this.noDataNotifiedFor = key;
+      } catch (err) {
+        console.warn(err);
+      }
+    },
+    maybeNotifyStaleData(force = false) {
+      if (this.healthState.kind !== "stale") return;
+      if (!force && this.staleNotifiedFor === this.latestDataTimestampMs) return;
+      if (!this.notificationSupported || this.notificationPermission !== "granted") return;
+
+      try {
+        new Notification("Farm Chokchai GPS", {
+          body: `${this.healthState.title}
+${this.healthState.action}`,
+          tag: `farmchokchai-stale-${this.latestDataTimestampMs}`,
+          renotify: false,
+        });
+        this.staleNotifiedFor = this.latestDataTimestampMs;
+      } catch (err) {
+        console.warn(err);
+      }
+    },
+    refreshHealthState(notify = false) {
+      const state = this.healthState;
+
+      if (state.kind === "ok") {
+        this.noDataToday = false;
+        this.noDataNotifiedFor = "";
+        this.staleNotifiedFor = "";
+        if (this.statusType !== "error") {
+          this.setStatus(state.title, "ok");
+        }
+        return state;
+      }
+
+      if (state.kind === "no_data") {
+        this.noDataToday = true;
+        this.noDataCheckedAt = new Date().toISOString();
+        this.setStatus(state.title, "warn");
+        if (notify) this.maybeNotifyNoData(false);
+      } else if (state.kind === "stale") {
+        this.noDataToday = false;
+        this.setStatus(state.title, "warn");
+        if (notify) this.maybeNotifyStaleData(false);
+      } else if (state.kind === "firebase_offline") {
+        this.setStatus(state.title, "error");
+      } else if (state.kind === "firebase_error") {
+        this.setStatus(state.title, "error");
+      } else if (state.kind === "front_error") {
+        this.setStatus(state.title, "error");
+      }
+
+      return state;
     },
     formatDateTime(value) {
       const d = toDateSafe(value);
@@ -265,6 +514,7 @@ createApp({
     },
     initFirebase() {
       if (!window.firebaseConfig || !window.firebaseConfig.apiKey) {
+        this.firebaseLastError = "ยังไม่ตั้งค่า Firebase config";
         this.setStatus("ยังไม่ตั้งค่า Firebase config", "warn");
         return false;
       }
@@ -274,9 +524,46 @@ createApp({
         return true;
       } catch (err) {
         console.error(err);
-        this.setStatus(`เริ่ม Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
+        this.firebaseLastError = `เริ่ม Firebase ไม่สำเร็จ: ${err.message || err}`;
+        this.setStatus(this.firebaseLastError, "error");
         return false;
       }
+    },
+    detachFirebaseInfoListener() {
+      if (firebaseInfoRef && firebaseInfoCallback) {
+        try {
+          firebaseInfoRef.off("value", firebaseInfoCallback);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      firebaseInfoRef = null;
+      firebaseInfoCallback = null;
+    },
+    subscribeFirebaseConnectionState() {
+      if (!this.initFirebase()) return;
+      this.detachFirebaseInfoListener();
+
+      firebaseInfoRef = firebaseDb.ref(".info/connected");
+      firebaseInfoCallback = (snapshot) => {
+        this.firebaseConnected = !!snapshot.val();
+        if (this.firebaseConnected) {
+          this.firebaseLastError = "";
+        } else {
+          this.setStatus("Firebase กำลังหลุดการเชื่อมต่อ", "warn");
+        }
+        this.refreshHealthState();
+      };
+
+      firebaseInfoRef.on(
+        "value",
+        firebaseInfoCallback,
+        (err) => {
+          console.error(err);
+          this.firebaseLastError = `อ่านสถานะการเชื่อมต่อ Firebase ไม่สำเร็จ: ${err.message || err}`;
+          this.setStatus(this.firebaseLastError, "error");
+        },
+      );
     },
     async loadVehicleMappings() {
       if (!this.initFirebase()) return false;
@@ -318,21 +605,27 @@ createApp({
     initMap() {
       if (mapInstance) return;
 
-      mapCanvasRenderer = L.canvas({ padding: 0.5 });
-      mapInstance = L.map("map", {
-        zoomControl: true,
-        preferCanvas: true,
-        updateWhenIdle: true,
-      }).setView([13.736717, 100.523186], 6);
+      try {
+        mapCanvasRenderer = L.canvas({ padding: 0.5 });
+        mapInstance = L.map("map", {
+          zoomControl: true,
+          preferCanvas: true,
+          updateWhenIdle: true,
+        }).setView([13.736717, 100.523186], 6);
 
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
-        maxZoom: 19,
-      }).addTo(mapInstance);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+          maxZoom: 19,
+        }).addTo(mapInstance);
 
-      this.mapReady = true;
-      setTimeout(() => mapInstance.invalidateSize(), 100);
+        this.mapReady = true;
+        setTimeout(() => mapInstance.invalidateSize(), 100);
+      } catch (err) {
+        console.error(err);
+        this.renderError = `สร้างแผนที่ไม่สำเร็จ: ${err.message || err}`;
+        this.setStatus(this.renderError, "error");
+      }
     },
     clearAllMapLayers() {
       if (!mapInstance) return;
@@ -554,24 +847,33 @@ createApp({
       return state;
     },
     renderLiveMap({ fitBounds = false } = {}) {
-      if (!mapInstance) this.initMap();
+      try {
+        this.renderError = "";
+        if (!mapInstance) this.initMap();
 
-      const summaries = this.visibleVehicleSummaries;
-      const activeIds = new Set(summaries.map((v) => v.vehicleId));
+        const summaries = this.visibleVehicleSummaries;
+        const activeIds = new Set(summaries.map((v) => v.vehicleId));
 
-      Object.keys(vehicleLayerStates).forEach((vehicleId) => {
-        if (!activeIds.has(vehicleId)) {
-          this.removeVehicleLayer(vehicleId);
+        Object.keys(vehicleLayerStates).forEach((vehicleId) => {
+          if (!activeIds.has(vehicleId)) {
+            this.removeVehicleLayer(vehicleId);
+          }
+        });
+
+        summaries.forEach((vehicle) => {
+          this.syncVehicleLayer(vehicle);
+        });
+
+        if (fitBounds && !this.initialAutoFitDone) {
+          this.fitToRoute();
+          this.initialAutoFitDone = true;
         }
-      });
-
-      summaries.forEach((vehicle) => {
-        this.syncVehicleLayer(vehicle);
-      });
-
-      if (fitBounds && !this.initialAutoFitDone) {
-        this.fitToRoute();
-        this.initialAutoFitDone = true;
+      } catch (err) {
+        console.error(err);
+        this.renderError = `แผนที่แสดงผลไม่สำเร็จ: ${err.message || err}`;
+        this.setStatus(this.renderError, "error");
+      } finally {
+        this.refreshHealthState();
       }
     },
     buildSegments(points) {
@@ -700,12 +1002,27 @@ createApp({
       liveRef = null;
       liveCallback = null;
     },
+    startHealthMonitor() {
+      this.stopHealthMonitor();
+      this.healthTimer = setInterval(() => {
+        this.healthPulse += 1;
+        this.refreshHealthState(true);
+      }, 30000);
+    },
+    stopHealthMonitor() {
+      if (this.healthTimer) {
+        clearInterval(this.healthTimer);
+        this.healthTimer = null;
+      }
+    },
     async subscribeTodayLive() {
       if (!this.initFirebase()) return;
 
+      this.subscribeFirebaseConnectionState();
       await this.loadVehicleMappings();
 
       this.loading = true;
+      this.firebaseLastError = "";
       this.setStatus("กำลังโหลดรถวิ่งของวันนี้...", "info");
       this.detachLiveListener();
 
@@ -730,6 +1047,7 @@ createApp({
         });
 
         this.vehiclesById = result;
+        this.lastSnapshotAt = new Date().toISOString();
 
         Object.keys(this.visibleVehicles).forEach((vehicleId) => {
           if (!visibleIds.has(vehicleId)) delete this.visibleVehicles[vehicleId];
@@ -744,14 +1062,25 @@ createApp({
         this.loading = false;
 
         const count = Object.keys(result).length;
-        if (count) this.setStatus(`พบรถวิ่งวันนี้ ${count} คัน`, "ok");
-        else this.setStatus("ยังไม่พบรถวิ่งของวันนี้", "warn");
+        if (count) {
+          this.noDataToday = false;
+          this.noDataCheckedAt = new Date().toISOString();
+          this.noDataNotifiedFor = "";
+          this.firebaseLastError = "";
+          this.setStatus(`พบรถวิ่งวันนี้ ${count} คัน`, "ok");
+        } else {
+          this.updateNoDataState(0);
+        }
+
+        this.refreshHealthState(true);
       };
 
       liveRef.on("value", liveCallback, (err) => {
         console.error(err);
-        this.setStatus(`โหลดข้อมูลไม่สำเร็จ: ${err.message || err}`, "error");
+        this.firebaseLastError = `โหลดข้อมูลไม่สำเร็จ: ${err.message || err}`;
+        this.setStatus(this.firebaseLastError, "error");
         this.loading = false;
+        this.refreshHealthState();
       });
     },
     toggleAllVehicles(show) {
@@ -810,10 +1139,13 @@ createApp({
     this.initMap();
     this.resizeHandler = () => this.resizeMap();
     window.addEventListener("resize", this.resizeHandler);
+    this.startHealthMonitor();
     this.subscribeTodayLive();
   },
   beforeUnmount() {
+    this.stopHealthMonitor();
     this.detachLiveListener();
+    this.detachFirebaseInfoListener();
     if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
     if (mapInstance) {
       mapInstance.remove();

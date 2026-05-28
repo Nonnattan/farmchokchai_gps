@@ -64,8 +64,69 @@ body.nav-open {
   gap: 10px;
 }
 
+.alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border: 2px solid #f59e0b;
+  background: #fff8eb;
+}
+
+.alert-banner--error {
+  border-color: #ef4444;
+  background: #fff1f2;
+}
+
+.alert-banner--ok {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.alert-banner__body {
+  display: grid;
+  gap: 6px;
+}
+
+.alert-banner__title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #92400e;
+}
+
+.alert-banner__text,
+.alert-banner__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #7c2d12;
+}
+
+.alert-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 45, 18, 0.2);
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.alert-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .controls-card {
   padding: 18px;
+}
+
+.controls-card--compact {
+  padding-bottom: 16px;
 }
 
 .section-label {
@@ -87,6 +148,27 @@ body.nav-open {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.threshold-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.threshold-input {
+  width: 110px;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  font: inherit;
+  background: #fff;
+}
+
+.threshold-hint {
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .vehicle-selection-list {
