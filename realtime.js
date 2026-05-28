@@ -114,6 +114,10 @@ createApp({
         typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
       noDataNotifiedFor: "",
       staleNotifiedFor: "",
+      alertRepeatMinutes: 10,
+      healthNotificationLastSignature: "",
+      healthNotificationLastShownAt: 0,
+      healthNotificationPausedUntil: 0,
       firebaseConnected: null,
       firebaseLastError: "",
       renderError: "",
@@ -286,6 +290,7 @@ createApp({
           action: "ตรวจ config, permission, rule และ network",
           latestAgeText,
           visible: true,
+          signature: `firebase_error:${String(this.firebaseLastError).slice(0, 120)}`,
         };
       }
 
@@ -299,6 +304,7 @@ createApp({
           action: "ตรวจอินเทอร์เน็ต, Realtime Database และสิทธิ์เข้าถึง",
           latestAgeText,
           visible: true,
+          signature: "firebase_offline",
         };
       }
 
@@ -312,6 +318,7 @@ createApp({
           action: "ตรวจไฟล์ JS, Leaflet และ DOM ของหน้า realtime",
           latestAgeText,
           visible: true,
+          signature: `front_error:${String(this.renderError).slice(0, 120)}`,
         };
       }
 
@@ -325,6 +332,7 @@ createApp({
           action: "ตรวจอุปกรณ์ที่ส่งข้อมูลทุก 5 วินาที และ path locations ใน Firebase",
           latestAgeText,
           visible: true,
+          signature: `no_data:${localDateKey()}`,
         };
       }
 
@@ -338,6 +346,7 @@ createApp({
           action: "ตรวจเครื่องส่งข้อมูล, สัญญาณ, และ backend ที่บันทึกเข้า Firebase",
           latestAgeText,
           visible: true,
+          signature: `stale:${this.staleThresholdMinutes}:${this.latestDataTimestampMs || "none"}`,
         };
       }
 
@@ -350,7 +359,21 @@ createApp({
         action: "",
         latestAgeText,
         visible: false,
+        signature: "ok",
       };
+    },
+    alertBannerVisible() {
+      const state = this.healthState;
+      if (!state.visible) return false;
+      return true;
+    },
+    alertBannerSubtitle() {
+      const remaining = this.healthNotificationPausedUntil - Date.now();
+      if (remaining > 0) {
+        const minutes = Math.ceil(remaining / 60000);
+        return `ซ่อนอยู่ จะเด้งอีกครั้งในประมาณ ${minutes} นาที`;
+      }
+      return "";
     },
     noDataBannerText() {
       if (!this.noDataToday) return "";
@@ -410,6 +433,67 @@ createApp({
         return false;
       }
     },
+    dismissHealthAlert() {
+      const state = this.healthState;
+      if (!state.visible) return;
+
+      const now = Date.now();
+      this.healthNotificationPausedUntil = now + this.alertRepeatMinutes * 60 * 1000;
+      this.healthNotificationLastSignature = state.signature;
+      this.healthNotificationLastShownAt = now;
+      this.setStatus(`ซ่อนการแจ้งเตือนชั่วคราว ${this.alertRepeatMinutes} นาที`, "info");
+    },
+    syncStickyAlertState(state = this.healthState) {
+      if (!state.visible) {
+        return;
+      }
+
+      const now = Date.now();
+      const suppressed = now < this.healthNotificationPausedUntil;
+
+      if (state.kind === "ok") return;
+
+      if (suppressed) {
+        return;
+      }
+
+      if (this.notificationSupported && this.notificationPermission === "granted") {
+        this.maybeNotifyHealthState(state);
+      }
+    },
+    maybeNotifyHealthState(state = this.healthState, force = false) {
+      if (!state.visible) return false;
+
+      const now = Date.now();
+      if (now < this.healthNotificationPausedUntil) return false;
+
+      if (!force && this.healthNotificationLastSignature === state.signature) {
+        const repeatMs = this.alertRepeatMinutes * 60 * 1000;
+        if (now - this.healthNotificationLastShownAt < repeatMs) {
+          return false;
+        }
+      }
+
+      if (!this.notificationSupported || this.notificationPermission !== "granted") {
+        return false;
+      }
+
+      try {
+        new Notification("Farm Chokchai GPS", {
+          body: `${state.title}
+${state.action}`.trim(),
+          tag: "farmchokchai-health",
+          renotify: true,
+          requireInteraction: true,
+        });
+        this.healthNotificationLastSignature = state.signature;
+        this.healthNotificationLastShownAt = now;
+        return true;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
+    },
     updateNoDataState(count) {
       const key = localDateKey();
       this.noDataToday = count === 0;
@@ -426,7 +510,14 @@ createApp({
     maybeNotifyNoData(force = false, key = localDateKey()) {
       if (!this.noDataToday) return;
 
-      if (!force && this.noDataNotifiedFor === key) return;
+      const stateSignature = `no_data:${key}`;
+      const now = Date.now();
+      const repeatMs = this.alertRepeatMinutes * 60 * 1000;
+
+      if (now < this.healthNotificationPausedUntil) return;
+      if (!force && this.healthNotificationLastSignature === stateSignature) {
+        if (now - this.healthNotificationLastShownAt < repeatMs) return;
+      }
 
       if (!this.notificationSupported || this.notificationPermission !== "granted") {
         return;
@@ -436,27 +527,42 @@ createApp({
         const body = "ขณะนี้ยังไม่มีข้อมูลรถส่งเข้าระบบในวันนี้";
         new Notification("Farm Chokchai GPS", {
           body,
-          tag: `farmchokchai-no-data-${key}`,
-          renotify: false,
+          tag: "farmchokchai-health",
+          renotify: true,
+          requireInteraction: true,
         });
         this.noDataNotifiedFor = key;
+        this.healthNotificationLastSignature = stateSignature;
+        this.healthNotificationLastShownAt = now;
       } catch (err) {
         console.warn(err);
       }
     },
     maybeNotifyStaleData(force = false) {
       if (this.healthState.kind !== "stale") return;
-      if (!force && this.staleNotifiedFor === this.latestDataTimestampMs) return;
+
+      const stateSignature = `stale:${this.latestDataTimestampMs}`;
+      const now = Date.now();
+      const repeatMs = this.alertRepeatMinutes * 60 * 1000;
+
+      if (now < this.healthNotificationPausedUntil) return;
+      if (!force && this.healthNotificationLastSignature === stateSignature) {
+        if (now - this.healthNotificationLastShownAt < repeatMs) return;
+      }
+
       if (!this.notificationSupported || this.notificationPermission !== "granted") return;
 
       try {
         new Notification("Farm Chokchai GPS", {
           body: `${this.healthState.title}
 ${this.healthState.action}`,
-          tag: `farmchokchai-stale-${this.latestDataTimestampMs}`,
-          renotify: false,
+          tag: "farmchokchai-health",
+          renotify: true,
+          requireInteraction: true,
         });
         this.staleNotifiedFor = this.latestDataTimestampMs;
+        this.healthNotificationLastSignature = stateSignature;
+        this.healthNotificationLastShownAt = now;
       } catch (err) {
         console.warn(err);
       }
@@ -468,6 +574,9 @@ ${this.healthState.action}`,
         this.noDataToday = false;
         this.noDataNotifiedFor = "";
         this.staleNotifiedFor = "";
+        this.healthNotificationPausedUntil = 0;
+        this.healthNotificationLastSignature = "";
+        this.healthNotificationLastShownAt = 0;
         if (this.statusType !== "error") {
           this.setStatus(state.title, "ok");
         }
@@ -478,17 +587,26 @@ ${this.healthState.action}`,
         this.noDataToday = true;
         this.noDataCheckedAt = new Date().toISOString();
         this.setStatus(state.title, "warn");
-        if (notify) this.maybeNotifyNoData(false);
       } else if (state.kind === "stale") {
         this.noDataToday = false;
         this.setStatus(state.title, "warn");
-        if (notify) this.maybeNotifyStaleData(false);
       } else if (state.kind === "firebase_offline") {
         this.setStatus(state.title, "error");
       } else if (state.kind === "firebase_error") {
         this.setStatus(state.title, "error");
       } else if (state.kind === "front_error") {
         this.setStatus(state.title, "error");
+      }
+
+      if (state.visible) {
+        this.syncStickyAlertState(state);
+        if (notify) {
+          if (state.kind === "no_data") this.maybeNotifyNoData(false);
+          if (state.kind === "stale") this.maybeNotifyStaleData(false);
+          if (state.kind === "firebase_error" || state.kind === "firebase_offline" || state.kind === "front_error") {
+            this.maybeNotifyHealthState(state);
+          }
+        }
       }
 
       return state;

@@ -93,47 +93,15 @@
         </button>
       </div>
 
-      <section class="card controls-card controls-card--compact">
-        <div class="field full">
-          <label class="section-label">เกณฑ์แจ้งเตือนเมื่อข้อมูลหยุดไหล</label>
-          <div class="threshold-row">
-            <input
-              v-model="staleMinutesInput"
-              class="threshold-input"
-              type="number"
-              min="1"
-              step="1"
-              inputmode="numeric"
-            />
-            <span class="threshold-hint">นาที (แนะนำ 10 นาที เพราะอุปกรณ์ส่งทุก 5 วินาที)</span>
-          </div>
+      <section class="card notification-card" v-if="healthState.visible">
+        <div class="notification-card__text">
+          <strong>{{ healthState.title }}</strong>
+          <span>{{ healthState.detail }}</span>
+          <small>
+            ระบบจะส่งแจ้งเตือนซ้ำทุก {{ alertRepeatMinutes }} นาที ถ้าปัญหายังอยู่ และจะไม่แสดงทับหลายอัน
+          </small>
         </div>
-      </section>
-
-      <section v-if="healthState.visible" class="card alert-banner" :class="`alert-banner--${healthState.tone}`">
-        <div class="alert-banner__body">
-          <div class="alert-banner__title">
-            {{ healthState.kind === 'front_error' ? '🧩' : healthState.kind === 'firebase_error' || healthState.kind === 'firebase_offline' ? '🛠️' : '⚠️' }}
-            {{ healthState.title }}
-          </div>
-          <div class="alert-banner__text">
-            {{ healthState.detail }}
-          </div>
-          <div class="alert-banner__meta">
-            <span class="alert-pill">{{ healthState.source }}</span>
-            <span class="alert-pill" v-if="healthState.latestAgeText && healthState.latestAgeText !== '-'">
-              ล่าสุด: {{ healthState.latestAgeText }}
-            </span>
-            <span class="alert-pill" v-if="noDataCheckedAt">
-              ตรวจล่าสุด: {{ formatDateTime(noDataCheckedAt) }}
-            </span>
-          </div>
-          <div class="alert-banner__meta" v-if="healthState.action">
-            วิธีเช็ก: {{ healthState.action }}
-          </div>
-        </div>
-
-        <div class="alert-banner__actions">
+        <div class="notification-card__actions">
           <button
             v-if="notificationSupported && notificationPermission !== 'granted'"
             class="btn primary"
@@ -149,6 +117,30 @@
           >
             ตรวจใหม่อีกครั้ง
           </button>
+          <button
+            class="btn secondary"
+            type="button"
+            @click="dismissHealthAlert"
+          >
+            ซ่อน 10 นาที
+          </button>
+        </div>
+      </section>
+
+      <section class="card controls-card controls-card--compact">
+        <div class="field full">
+          <label class="section-label">เกณฑ์แจ้งเตือนเมื่อข้อมูลหยุดไหล</label>
+          <div class="threshold-row">
+            <input
+              v-model="staleMinutesInput"
+              class="threshold-input"
+              type="number"
+              min="1"
+              step="1"
+              inputmode="numeric"
+            />
+            <span class="threshold-hint">นาที (แนะนำ 10 นาที เพราะอุปกรณ์ส่งทุก 5 วินาที)</span>
+          </div>
         </div>
       </section>
 

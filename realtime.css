@@ -64,6 +64,39 @@ body.nav-open {
   gap: 10px;
 }
 
+.notification-card {
+  padding: 16px 18px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  background: #f8fafc;
+}
+
+.notification-card__text {
+  display: grid;
+  gap: 4px;
+}
+
+.notification-card__text strong {
+  font-size: 18px;
+}
+
+.notification-card__text span {
+  color: var(--text);
+}
+
+.notification-card__text small {
+  color: var(--muted);
+}
+
+.notification-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .alert-banner {
   display: flex;
   align-items: center;
@@ -119,6 +152,21 @@ body.nav-open {
   flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
+}
+
+.alert-banner--sticky {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.18);
+}
+
+.alert-banner--sticky .alert-banner__actions {
+  align-items: flex-start;
 }
 
 .controls-card {
