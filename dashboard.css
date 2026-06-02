@@ -31,6 +31,44 @@ body.nav-open {
   width: 100%;
 }
 
+.filter-panel {
+  padding: 18px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.filter-field {
+  display: grid;
+  gap: 8px;
+}
+
+.filter-field span {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.filter-field select,
+.filter-field input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.filter-field select:focus,
+.filter-field input:focus {
+  border-color: rgba(56, 189, 248, 0.6);
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -192,4 +230,225 @@ code {
   .summary-table {
     min-width: 640px;
   }
+
+  .bar-item {
+    grid-template-columns: 1fr;
+  }
+
+  .bar-item__value {
+    text-align: left;
+  }
+
+  .pie-figure {
+    grid-template-columns: 1fr;
+  }
+
+  .pie-svg {
+    max-width: 280px;
+  }
+}
+
+
+.dashboard-charts {
+  margin-top: 2px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.chart-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid rgba(219, 230, 242, 0.9);
+}
+
+.chart-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.chart-card h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.chart-wrap {
+  position: relative;
+  min-height: 280px;
+}
+
+.svg-chart-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.bar-svg {
+  display: block;
+  min-width: 760px;
+  height: auto;
+}
+
+.grid-line {
+  stroke: #d8e1ee;
+  stroke-width: 1.2;
+}
+
+.axis-label {
+  fill: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.axis-label--y {
+  text-anchor: end;
+}
+
+.axis-label--top {
+  fill: #0f172a;
+  font-size: 12px;
+}
+
+.axis-label--x {
+  fill: #334155;
+  font-size: 12px;
+}
+
+.bar-rect {
+  filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.08));
+}
+
+.chart-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pie-figure {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.pie-svg {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  margin-inline: auto;
+  display: block;
+}
+
+.pie-value {
+  fill: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(15, 23, 42, 0.25);
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
+
+.pie-legend {
+  display: grid;
+  gap: 10px;
+}
+
+.pie-legend__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(219, 230, 242, 0.9);
+}
+
+.pie-legend__body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pie-legend__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pie-legend__sub {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pie-figure {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.pie-chart-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pie-chart {
+  width: 320px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  position: relative;
+  background: conic-gradient(#cbd5e1 0deg 360deg);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65), 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.pie-chart::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.7);
+  pointer-events: none;
+}
+
+.pie-chart__center {
+  position: absolute;
+  inset: 50%;
+  transform: translate(-50%, -50%);
+  width: 122px;
+  height: 122px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.pie-chart__center strong {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.pie-chart__center span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
 }

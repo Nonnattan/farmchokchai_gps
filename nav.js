@@ -1,4 +1,39 @@
 (function () {
+  function getStatusElements() {
+    return Array.from(document.querySelectorAll('[data-firebase-status]'));
+  }
+
+  function applyStatusToElement(el, connected, message) {
+    if (!el) return;
+
+    el.classList.remove('is-connected', 'is-disconnected', 'is-unknown');
+
+    const dot = el.querySelector('.site-nav__status-dot');
+    const text = el.querySelector('.site-nav__status-text');
+
+    if (connected === true) {
+      el.classList.add('is-connected');
+      if (dot) dot.setAttribute('aria-label', 'Firebase เชื่อมต่อแล้ว');
+      if (text) text.textContent = message || 'เชื่อมต่อ Firebase ได้ปกติ';
+      return;
+    }
+
+    if (connected === false) {
+      el.classList.add('is-disconnected');
+      if (dot) dot.setAttribute('aria-label', 'Firebase เชื่อมต่อไม่ได้');
+      if (text) text.textContent = message || 'เชื่อมต่อไม่ได้';
+      return;
+    }
+
+    el.classList.add('is-unknown');
+    if (dot) dot.setAttribute('aria-label', 'กำลังตรวจสอบ Firebase');
+    if (text) text.textContent = message || 'กำลังตรวจสอบ Firebase...';
+  }
+
+  window.setFirebaseNavStatus = function setFirebaseNavStatus(connected, message) {
+    getStatusElements().forEach((el) => applyStatusToElement(el, connected, message));
+  };
+
   function getPageName() {
     const current = location.pathname.split('/').pop() || 'index.html';
     return current;
@@ -13,6 +48,8 @@
     const links = document.querySelectorAll('.site-nav__link');
 
     if (!nav || !toggle || !drawer || !backdrop) return;
+
+    window.setFirebaseNavStatus(null, 'กำลังตรวจสอบ Firebase...');
 
     const page = getPageName();
 

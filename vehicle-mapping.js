@@ -1,6 +1,8 @@
 const { createApp } = Vue;
 
 let firebaseDb = null;
+let firebaseInfoRef = null;
+let firebaseInfoCallback = null;
 
 function pad(n) {
   return String(Math.abs(Number(n) || 0)).padStart(2, "0");
@@ -37,6 +39,12 @@ function formatDateTime(value) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
     d.getHours(),
   )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function syncFirebaseBadge(connected, message) {
+  if (window.setFirebaseNavStatus) {
+    window.setFirebaseNavStatus(connected, message);
+  }
 }
 
 createApp({
@@ -85,8 +93,38 @@ createApp({
       this.statusType = type;
     },
 
+    detachFirebaseInfoListener() {
+      if (firebaseInfoRef && firebaseInfoCallback) {
+        try {
+          firebaseInfoRef.off("value", firebaseInfoCallback);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      firebaseInfoRef = null;
+      firebaseInfoCallback = null;
+    },
+
+    subscribeFirebaseConnectionState() {
+      if (!this.initFirebase()) return;
+      this.detachFirebaseInfoListener();
+
+      firebaseInfoRef = firebaseDb.ref(".info/connected");
+      firebaseInfoCallback = (snapshot) => {
+        const connected = !!snapshot.val();
+        syncFirebaseBadge(connected, connected ? "เชื่อมต่อ Firebase ได้ปกติ" : "เชื่อมต่อไม่ได้");
+      };
+
+      firebaseInfoRef.on("value", firebaseInfoCallback, (err) => {
+        console.error(err);
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
+        this.setStatus(`อ่านสถานะการเชื่อมต่อ Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
+      });
+    },
+
     initFirebase() {
       if (!window.firebaseConfig || !window.firebaseConfig.apiKey) {
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
         this.setStatus("ยังไม่ตั้งค่า Firebase config", "warn");
         return false;
       }
@@ -97,6 +135,7 @@ createApp({
         return true;
       } catch (err) {
         console.error(err);
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
         this.setStatus(`เริ่ม Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
         return false;
       }
@@ -230,6 +269,17 @@ createApp({
   },
 
   mounted() {
+    this.subscribeFirebaseConnectionState();
     this.reloadAll();
+  },
+
+  beforeUnmount() {
+    if (firebaseInfoRef && firebaseInfoCallback) {
+      try {
+        firebaseInfoRef.off("value", firebaseInfoCallback);
+      } catch (err) {
+        console.warn(err);
+      }
+    }
   },
 }).mount("#app");

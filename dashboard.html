@@ -11,7 +11,7 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
-  </head>
+      </head>
   <body>
     <nav class="site-nav">
   <div class="site-nav__bar">
@@ -28,9 +28,12 @@
     <a href="dashboard.html" class="site-nav__brand">
       <span class="site-nav__logo">🚚</span>
       <span class="site-nav__title">
-        <strong>Farm Chokchai GPS</strong>
-        <span>Realtime & History</span>
-      </span>
+  <strong>Farm Chokchai GPS</strong>
+  <span class="site-nav__status" data-firebase-status aria-live="polite">
+    <span class="site-nav__status-dot"></span>
+    <span class="site-nav__status-text">กำลังตรวจสอบ Firebase...</span>
+  </span>
+</span>
     </a>
 
     <div class="site-nav__links site-nav__links--desktop" aria-label="เมนูหลัก">
@@ -69,8 +72,7 @@
         <div class="hero-badge">ADMIN DASHBOARD</div>
         <h1>ภาพรวมระบบ GPS ทั้งหมด</h1>
         <p class="subtitle">
-          ดูจำนวนรถที่ออนไลน์วันนี้, จุดข้อมูลล่าสุด,
-          และสถานะการจับคู่ทะเบียนรถได้จากหน้าเดียว
+          ดูภาพรวมระยะทางรวมของรถแต่ละคันในช่วงที่เลือกได้จากหน้าเดียว
         </p>
       </header>
 
@@ -80,22 +82,178 @@
         </button>
       </section>
 
+      <section class="card dashboard-panel filter-panel">
+        <div class="panel-head">
+          <div>
+            <h2>ตัวกรองช่วงเวลา</h2>
+            <p class="small-note">เลือกดูแบบรายวัน รายเดือน หรือรายปี เพื่อสรุประยะทางรวมให้ตรงช่วงที่ต้องการ</p>
+          </div>
+          <span class="metric-pill">{{ selectedPeriodText }}</span>
+        </div>
+
+        <div class="filter-grid">
+          <label class="filter-field">
+            <span>รูปแบบ</span>
+            <select v-model="filterMode">
+              <option value="day">รายวัน</option>
+              <option value="month">รายเดือน</option>
+              <option value="year">รายปี</option>
+            </select>
+          </label>
+
+          <label v-if="filterMode === 'day'" class="filter-field">
+            <span>เลือกวันที่</span>
+            <input type="date" v-model="filterDate" />
+          </label>
+
+          <label v-if="filterMode === 'month'" class="filter-field">
+            <span>เลือกเดือน</span>
+            <input type="month" v-model="filterMonth" />
+          </label>
+
+          <label v-if="filterMode === 'year'" class="filter-field">
+            <span>เลือกปี</span>
+            <input type="number" v-model="filterYear" min="2000" max="2100" />
+          </label>
+        </div>
+      </section>
+
       <section class="mini-grid dashboard-stats">
         <div class="mini-stat">
-          <span>รถวันนี้</span>
+          <span>รถในช่วงที่เลือก</span>
           <strong>{{ liveVehicleCount }}</strong>
         </div>
         <div class="mini-stat">
-          <span>จุดวันนี้</span>
-          <strong>{{ todayPointCount }}</strong>
+          <span>จุดในช่วงที่เลือก</span>
+          <strong>{{ totalPointText }}</strong>
         </div>
         <div class="mini-stat">
-          <span>ทะเบียนที่จับคู่</span>
-          <strong>{{ mappingCount }}</strong>
+          <span>ระยะทางรวม</span>
+          <strong>{{ totalDistanceText }}</strong>
         </div>
         <div class="mini-stat">
           <span>อัปเดตล่าสุด</span>
           <strong>{{ lastUpdatedText }}</strong>
+        </div>
+      </section>
+      <section class="card dashboard-panel dashboard-charts">
+        <div class="panel-head">
+          <div>
+            <h2>กราฟสรุป</h2>
+            <p class="small-note">กราฟแท่งแสดงระยะทางรวมของรถแต่ละคัน และกราฟ pie แสดงสัดส่วนระยะทางรวมของคันที่วิ่งมากที่สุดในช่วงที่เลือก</p>
+          </div>
+        </div>
+
+        <div class="chart-grid">
+          <article class="chart-card">
+            <div class="chart-card__head">
+              <div>
+                <h3>{{ barChartTitle }}</h3>
+                <p class="chart-note">แสดงรถทุกคันตามระยะทางรวมในช่วงที่เลือก</p>
+              </div>
+              <span class="metric-pill">{{ liveVehicleCount }} คัน</span>
+            </div>
+
+            <div v-if="!barChartBars.length" class="empty-state">ยังไม่มีข้อมูลสำหรับกราฟแท่ง</div>
+            <div v-else class="svg-chart-scroll">
+              <svg
+                class="bar-svg"
+                :viewBox="`0 0 ${barSvgWidth} ${barSvgHeight}`"
+                :width="barSvgWidth"
+                :height="barSvgHeight"
+                role="img"
+                :aria-label="`กราฟแท่งระยะทางรวม ${selectedPeriodText}`"
+              >
+                <g class="bar-grid">
+                  <template v-for="tick in barChartTicks" :key="tick.label">
+                    <line
+                      :x1="52"
+                      :y1="272 - (tick.value / barChartMaxDistance) * 210"
+                      :x2="barSvgWidth - 18"
+                      :y2="272 - (tick.value / barChartMaxDistance) * 210"
+                      class="grid-line"
+                    />
+                    <text
+                      x="46"
+                      :y="276 - (tick.value / barChartMaxDistance) * 210"
+                      class="axis-label axis-label--y"
+                    >
+                      {{ tick.label }}
+                    </text>
+                  </template>
+                </g>
+
+                <g v-for="bar in barChartBars" :key="bar.vehicleId" class="bar-group">
+                  <rect
+                    class="bar-rect"
+                    :x="bar.x"
+                    :y="bar.y"
+                    :width="bar.barWidth"
+                    :height="bar.height"
+                    :fill="bar.color"
+                    rx="10"
+                  />
+                  <text
+                    :x="bar.x + bar.barWidth / 2"
+                    :y="bar.y - 8"
+                    class="axis-label axis-label--top"
+                    text-anchor="middle"
+                  >
+                    {{ bar.valueLabel }} km
+                  </text>
+
+                  <text
+                    v-for="(line, lineIndex) in bar.labelLines"
+                    :key="`${bar.vehicleId}-${lineIndex}`"
+                    :x="bar.x + bar.barWidth / 2"
+                    :y="294 + lineIndex * 15"
+                    class="axis-label axis-label--x"
+                    text-anchor="middle"
+                  >
+                    {{ line }}
+                  </text>
+                </g>
+              </svg>
+            </div>
+          </article>
+
+          <article class="chart-card">
+            <div class="chart-card__head">
+              <div>
+                <h3>กราฟ Pie: สัดส่วนระยะทาง</h3>
+                <p class="chart-note">แสดงรถ 6 คันที่วิ่งมากที่สุด และรวมคันที่เหลือไว้ใน “อื่นๆ”</p>
+              </div>
+              <span class="metric-pill">Top 6 + อื่นๆ</span>
+            </div>
+
+            <div v-if="!pieSegments.length" class="empty-state">ยังไม่มีข้อมูลสำหรับกราฟ Pie</div>
+            <div v-else class="pie-figure">
+              <div class="pie-chart-wrap">
+                <div
+                  class="pie-chart"
+                  :style="pieGradientStyle"
+                  role="img"
+                  :aria-label="`กราฟ pie ระยะทางรวม ${selectedPeriodText}`"
+                >
+                  <div class="pie-chart__center">
+                    <strong>{{ totalDistanceText }}</strong>
+                    <span>ระยะทางรวม</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pie-legend">
+                <div v-for="segment in pieLegendRows" :key="segment.label" class="pie-legend__item">
+                  <span class="swatch" :style="{ background: segment.color }"></span>
+                  <div class="pie-legend__body">
+                    <span class="pie-legend__label">{{ segment.label }}</span>
+                    <span class="pie-legend__sub">{{ segment.distanceText }}</span>
+                  </div>
+                  <strong>{{ segment.percent.toFixed(1) }}%</strong>
+                </div>
+              </div>
+            </div>
+          </article>
         </div>
       </section>
 
@@ -103,8 +261,8 @@
         <article class="dashboard-panel">
           <div class="panel-head">
             <div>
-              <h2>รถที่มีข้อมูลวันนี้</h2>
-              <p class="small-note">แสดงเฉพาะคันที่มีข้อมูลในวันนี้</p>
+              <h2>รถที่มีข้อมูลในช่วงที่เลือก</h2>
+              <p class="small-note">แสดงเฉพาะคันที่มีข้อมูลในช่วงเวลาที่เลือก</p>
             </div>
           </div>
 
@@ -139,7 +297,7 @@
             </article>
 
             <div v-if="!liveVehicles.length" class="empty-state">
-              ยังไม่มีข้อมูลรถวันนี้
+              ยังไม่มีข้อมูลรถในช่วงที่เลือก
             </div>
           </div>
         </article>
@@ -183,7 +341,7 @@
           <div>
             <h2>สรุปต่อคัน</h2>
             <p class="small-note">
-              เหมาะสำหรับดูว่าคันไหนวิ่งล่าสุดและมีทะเบียนอะไรจับคู่ไว้
+              เหมาะสำหรับดูว่าคันไหนวิ่งรวมมากที่สุดในช่วงที่เลือก
             </p>
           </div>
         </div>
@@ -194,8 +352,8 @@
               <tr>
                 <th>vehicle_id</th>
                 <th>ทะเบียน</th>
-                <th>จุดวันนี้</th>
-                <th>ระยะวันนี้ (km)</th>
+                <th>จุดในช่วง</th>
+                <th>ระยะในช่วง (km)</th>
                 <th>ล่าสุด</th>
               </tr>
             </thead>

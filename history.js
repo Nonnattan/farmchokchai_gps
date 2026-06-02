@@ -1,6 +1,8 @@
 const { createApp } = Vue;
 
 let firebaseDb = null;
+let firebaseInfoRef = null;
+let firebaseInfoCallback = null;
 let mapInstance = null;
 let routeLayers = [];
 let pointLayers = [];
@@ -82,6 +84,45 @@ function formatDateTime(value) {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(
     d.getHours(),
   )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatDistanceKm(meters) {
+  if (!Number.isFinite(meters)) return "-";
+  return `${(meters / 1000).toFixed(2)} km`;
+}
+
+function syncFirebaseBadge(connected, message) {
+  if (typeof window.setFirebaseNavStatus === "function") {
+    window.setFirebaseNavStatus(connected, message);
+  }
+}
+
+function isSuspiciousJump(prev, curr, maxSpeedKmh = 180) {
+  if (!prev || !curr || !prev.date || !curr.date) return null;
+
+  const timeMs = curr.date.getTime() - prev.date.getTime();
+  if (!Number.isFinite(timeMs) || timeMs <= 0) {
+    return { suspicious: true, reason: "เวลาไม่เรียงหรือซ้ำกับจุดก่อนหน้า" };
+  }
+
+  const distanceMeters = haversineMeters(prev.lat, prev.lng, curr.lat, curr.lng);
+  const hours = timeMs / 3_600_000;
+  const impliedSpeed = hours > 0 ? (distanceMeters / 1000) / hours : Infinity;
+
+  if (!Number.isFinite(distanceMeters) || !Number.isFinite(impliedSpeed)) {
+    return { suspicious: true, reason: "คำนวณระยะทางไม่ได้" };
+  }
+
+  if (impliedSpeed > maxSpeedKmh) {
+    return {
+      suspicious: true,
+      reason: `กระโดด ${formatDistanceKm(distanceMeters)} ใน ${(
+        timeMs / 60000
+      ).toFixed(1)} นาที`,
+    };
+  }
+
+  return null;
 }
 
 function colorForId(vehicleId) {
@@ -457,6 +498,35 @@ createApp({
       this.statusType = type;
     },
 
+    detachFirebaseInfoListener() {
+      if (firebaseInfoRef && firebaseInfoCallback) {
+        try {
+          firebaseInfoRef.off("value", firebaseInfoCallback);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      firebaseInfoRef = null;
+      firebaseInfoCallback = null;
+    },
+
+    subscribeFirebaseConnectionState() {
+      if (!this.initFirebase()) return;
+      this.detachFirebaseInfoListener();
+
+      firebaseInfoRef = firebaseDb.ref(".info/connected");
+      firebaseInfoCallback = (snapshot) => {
+        const connected = !!snapshot.val();
+        syncFirebaseBadge(connected, connected ? "เชื่อมต่อ Firebase ได้ปกติ" : "เชื่อมต่อไม่ได้");
+      };
+
+      firebaseInfoRef.on("value", firebaseInfoCallback, (err) => {
+        console.error(err);
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
+        this.setStatus(`อ่านสถานะการเชื่อมต่อ Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
+      });
+    },
+
     ensureDateDefaults() {
       const today = todayISODate();
       if (!this.fromDate) this.fromDate = today;
@@ -470,6 +540,7 @@ createApp({
         !window.firebaseConfig.apiKey ||
         window.firebaseConfig.apiKey === "YOUR_API_KEY"
       ) {
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
         this.setStatus("ยังไม่ตั้งค่า Firebase config", "warn");
         return false;
       }
@@ -480,6 +551,7 @@ createApp({
         return true;
       } catch (err) {
         console.error(err);
+        syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
         this.setStatus(`เริ่ม Firebase ไม่สำเร็จ: ${err.message || err}`, "error");
         return false;
       }
@@ -585,17 +657,48 @@ createApp({
     getFilteredPoints(points) {
       const from = this.fromDate ? new Date(`${this.fromDate}T00:00:00`) : null;
       const to = this.toDate ? new Date(`${this.toDate}T23:59:59.999`) : null;
+      const sorted = (points || [])
+        .filter((p) => {
+          if (!p.date) return false;
+          if (from && p.date < from) return false;
+          if (to && p.date > to) return false;
+          return true;
+        })
+        .slice()
+        .sort((a, b) => a.date.getTime() - b.date.getTime());
 
-      return (points || []).filter((p) => {
-        if (!p.date) return false;
-        if (from && p.date < from) return false;
-        if (to && p.date > to) return false;
-        return true;
+      const rows = [];
+      let lastAccepted = null;
+
+      sorted.forEach((p) => {
+        const row = { ...p, isSuspicious: false, suspiciousReason: "" };
+        const suspicious = lastAccepted ? isSuspiciousJump(lastAccepted, row) : null;
+
+        if (suspicious) {
+          row.isSuspicious = true;
+          row.suspiciousReason = suspicious.reason;
+          row.segmentMeters = null;
+          row.cumulativeMeters = lastAccepted?.cumulativeMeters ?? null;
+          row.cumulativeKm = lastAccepted?.cumulativeKm ?? null;
+        } else {
+          row.segmentMeters = lastAccepted
+            ? haversineMeters(lastAccepted.lat, lastAccepted.lng, row.lat, row.lng)
+            : 0;
+          row.cumulativeMeters = lastAccepted
+            ? (lastAccepted.cumulativeMeters || 0) + (row.segmentMeters || 0)
+            : 0;
+          row.cumulativeKm = (row.cumulativeMeters || 0) / 1000;
+          lastAccepted = row;
+        }
+
+        rows.push(row);
       });
+
+      return rows;
     },
 
     buildSegments(points) {
-      const pts = points || [];
+      const pts = (points || []).filter((p) => !p.isSuspicious);
       if (!pts.length) return [];
 
       const segments = [];
@@ -933,6 +1036,12 @@ createApp({
 
       mapInstance.setView([row.lat, row.lng], Math.max(mapInstance.getZoom(), 16));
 
+      const warningText = row.isSuspicious
+        ? `<br/><strong style="color:#dc2626">จุดนี้ถูกมองว่าเป็น outlier</strong>${
+            row.suspiciousReason ? `<br/>${row.suspiciousReason}` : ""
+          }`
+        : "";
+
       const popup = L.popup().setLatLng([row.lat, row.lng]).setContent(
         `<strong>${row.label} — ${row.vehicleId}</strong><br/><strong>${formatDateTime(
           row.timestampiso,
@@ -941,11 +1050,35 @@ createApp({
           6,
         )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ACC: ${this.formatAccuracy(
           row.accuracy,
-        )}<br/>ระยะจุดนี้: ${row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
+        )}${warningText}<br/>ระยะจุดนี้: ${row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
         } m<br/>ระยะวันนี้สะสม: ${row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"} km`,
       );
 
       popup.openOn(mapInstance);
+    },
+
+    async deletePoint(row) {
+      if (!row || !row.vehicleId || !row.key) return;
+
+      const label = `${row.label || row.vehicleId} • ${formatDateTime(row.timestampiso)}`;
+      const confirmed = window.confirm(`ลบจุดนี้ใช่ไหม?\n${label}`);
+      if (!confirmed) return;
+
+      if (!this.initFirebase()) return;
+
+      this.loading = true;
+      this.setStatus("กำลังลบจุด...", "info");
+
+      try {
+        await firebaseDb.ref(`locations/${row.vehicleId}/${row.key}`).remove();
+        this.setStatus("ลบจุดเรียบร้อยแล้ว", "ok");
+        await this.loadTracks();
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`ลบจุดไม่สำเร็จ: ${err.message || err}`, "error");
+      } finally {
+        this.loading = false;
+      }
     },
 
     exportCsv() {
@@ -1033,6 +1166,7 @@ createApp({
 
   async mounted() {
     this.ensureDateDefaults();
+    this.subscribeFirebaseConnectionState();
     this.initMap();
 
     this.resizeHandler = () => this.resizeMap();
@@ -1045,6 +1179,14 @@ createApp({
   beforeUnmount() {
     if (this.resizeHandler) {
       window.removeEventListener("resize", this.resizeHandler);
+    }
+
+    if (firebaseInfoRef && firebaseInfoCallback) {
+      try {
+        firebaseInfoRef.off("value", firebaseInfoCallback);
+      } catch (err) {
+        console.warn(err);
+      }
     }
 
     if (mapInstance) {

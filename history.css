@@ -819,3 +819,23 @@ input[type="number"]:focus {
   vector-effect: non-scaling-stroke;
   shape-rendering: geometricPrecision;
 }
+
+
+.point-warning {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid #fecdd3;
+}
+
+.row-btn.danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff5f5;
+}

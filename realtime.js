@@ -11,6 +11,12 @@ let liveCallback = null;
 let firebaseInfoRef = null;
 let firebaseInfoCallback = null;
 
+function syncFirebaseBadge(connected, message) {
+  if (typeof window.setFirebaseNavStatus === 'function') {
+    window.setFirebaseNavStatus(connected, message);
+  }
+}
+
 const COLORS = [
   "#38bdf8", "#f59e0b", "#22c55e", "#a855f7",
   "#ef4444", "#14b8a6", "#eab308", "#f97316",
@@ -665,6 +671,7 @@ ${this.healthState.action}`,
       firebaseInfoRef = firebaseDb.ref(".info/connected");
       firebaseInfoCallback = (snapshot) => {
         this.firebaseConnected = !!snapshot.val();
+        syncFirebaseBadge(this.firebaseConnected, this.firebaseConnected ? "เชื่อมต่อ Firebase ได้ปกติ" : "เชื่อมต่อไม่ได้");
         if (this.firebaseConnected) {
           this.firebaseLastError = "";
         } else {
@@ -679,6 +686,7 @@ ${this.healthState.action}`,
         (err) => {
           console.error(err);
           this.firebaseLastError = `อ่านสถานะการเชื่อมต่อ Firebase ไม่สำเร็จ: ${err.message || err}`;
+          syncFirebaseBadge(false, "เชื่อมต่อไม่ได้");
           this.setStatus(this.firebaseLastError, "error");
         },
       );
@@ -1117,8 +1125,17 @@ ${this.healthState.action}`,
           console.warn(err);
         }
       }
+      if (firebaseInfoRef && firebaseInfoCallback) {
+        try {
+          firebaseInfoRef.off("value", firebaseInfoCallback);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
       liveRef = null;
       liveCallback = null;
+      firebaseInfoRef = null;
+      firebaseInfoCallback = null;
     },
     startHealthMonitor() {
       this.stopHealthMonitor();
