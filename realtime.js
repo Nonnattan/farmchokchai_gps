@@ -6,15 +6,42 @@ let mapCanvasRenderer = null;
 let routeLayers = [];
 let pointLayers = [];
 let vehicleLayerStates = Object.create(null);
-let liveRef = null;
-let liveCallback = null;
+let vehicleLiveRefs = Object.create(null);
+let vehicleLiveCallbacks = Object.create(null);
 let firebaseInfoRef = null;
 let firebaseInfoCallback = null;
+
+const ROUTE_CACHE_PREFIX = "farmchokchai_realtime_route_cache_v1";
+const ROUTE_CACHE_MAX_POINTS = 6000;
 
 function syncFirebaseBadge(connected, message) {
   if (typeof window.setFirebaseNavStatus === 'function') {
     window.setFirebaseNavStatus(connected, message);
   }
+}
+
+function toIsoWithOffset(date = new Date()) {
+  const tz = -date.getTimezoneOffset();
+  const sign = tz >= 0 ? "+" : "-";
+  const hh = String(Math.floor(Math.abs(tz) / 60)).padStart(2, "0");
+  const mm = String(Math.abs(tz) % 60).padStart(2, "0");
+
+  return (
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}` +
+    `T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}` +
+    `${sign}${hh}:${mm}`
+  );
+}
+
+function getTodayKeyRange() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return {
+    startKey: toIsoWithOffset(start),
+    endKey: toIsoWithOffset(end),
+  };
 }
 
 const COLORS = [
@@ -91,17 +118,88 @@ function localDateKey(date = new Date()) {
   return [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join("-");
 }
 
+function getRouteCacheStorageKey(vehicleId, date = new Date()) {
+  return `${ROUTE_CACHE_PREFIX}:${localDateKey(date)}:${String(vehicleId || "").trim()}`;
+}
+
+function serializePointForCache(point) {
+  if (!point) return null;
+  return {
+    key: point.key || null,
+    lat: point.lat,
+    lng: point.lng,
+    speed: point.speed ?? null,
+    accuracy: point.accuracy ?? null,
+    timestampiso: point.timestampiso || null,
+  };
+}
+
+function rehydratePointFromCache(raw) {
+  if (!raw) return null;
+  const lat = Number(raw.lat);
+  const lng = Number(raw.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const timestampiso = String(raw.timestampiso || raw.key || "");
+  const date = toDateSafe(timestampiso);
+  if (!date) return null;
+
+  return {
+    key: raw.key || timestampiso,
+    lat,
+    lng,
+    speed: Number.isFinite(Number(raw.speed)) ? Number(raw.speed) : null,
+    accuracy: Number.isFinite(Number(raw.accuracy)) ? Number(raw.accuracy) : null,
+    timestampiso,
+    date,
+    raw: null,
+    pointNo: 0,
+    segmentMeters: 0,
+    cumulativeMeters: 0,
+    cumulativeKm: 0,
+  };
+}
+
+function readRouteCache(vehicleId, date = new Date()) {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = localStorage.getItem(getRouteCacheStorageKey(vehicleId, date));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(rehydratePointFromCache).filter(Boolean);
+  } catch (err) {
+    console.warn(err);
+    return [];
+  }
+}
+
+function writeRouteCache(vehicleId, points, date = new Date()) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const simplified = (Array.isArray(points) ? points : [])
+      .map(serializePointForCache)
+      .filter(Boolean)
+      .slice(-ROUTE_CACHE_MAX_POINTS);
+    localStorage.setItem(getRouteCacheStorageKey(vehicleId, date), JSON.stringify(simplified));
+  } catch (err) {
+    console.warn(err);
+  }
+}
+
 createApp({
   data() {
     return {
       loading: false,
-      status: "กำลังรอข้อมูลรถวันนี้...",
+      status: "กำลังรอข้อมูลรถล่าสุด...",
       statusType: "info",
       gapMinutesInput: "10",
       staleMinutesInput: "10",
       vehiclesById: {},
       visibleVehicles: {},
       vehicleMappings: {},
+      routeCacheDateKey: localDateKey(new Date()),
+      routePointCacheByVehicle: Object.create(null),
       lastRefreshAt: null,
       mapReady: false,
       resizeHandler: null,
@@ -720,6 +818,36 @@ ${this.healthState.action}`,
       }
     },
 
+    async loadTrackedVehicleIds() {
+      if (!this.initFirebase()) return [];
+
+      const ids = Object.keys(this.vehicleMappings || {}).filter(Boolean);
+      if (ids.length) {
+        ids.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
+        return ids;
+      }
+
+      try {
+        const snap = await firebaseDb.ref("locations").once("value");
+        const fallbackIds = [];
+        snap.forEach((child) => {
+          const id = String(child.key || "").trim();
+          if (id) fallbackIds.push(id);
+        });
+
+        fallbackIds.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
+        this.setStatus(
+          "ไม่พบ vehicle_mappings จึงต้องอ่านรายชื่อรถจาก locations แบบครั้งเดียว",
+          "warn",
+        );
+        return fallbackIds;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`อ่านรายชื่อรถไม่สำเร็จ: ${err.message || err}`, "error");
+        return [];
+      }
+    },
+
     displayVehicleText(vehicleId) {
       const id = String(vehicleId || "").trim();
       if (!id) return "-";
@@ -1059,6 +1187,116 @@ ${this.healthState.action}`,
       if (sampled[sampled.length - 1] !== last) sampled.push(last);
       return sampled;
     },
+    ensureRouteCacheDate() {
+      const todayKey = localDateKey(new Date());
+      if (this.routeCacheDateKey !== todayKey) {
+        this.routeCacheDateKey = todayKey;
+        this.routePointCacheByVehicle = Object.create(null);
+      }
+      return todayKey;
+    },
+    loadRouteCacheForVehicle(vehicleId) {
+      this.ensureRouteCacheDate();
+      return readRouteCache(vehicleId, new Date());
+    },
+    setRouteCacheForVehicle(vehicleId, points) {
+      this.ensureRouteCacheDate();
+      const normalized = this.normalizeRoutePoints(points);
+      this.routePointCacheByVehicle[vehicleId] = normalized.slice();
+      writeRouteCache(vehicleId, normalized, new Date());
+      return normalized;
+    },
+    normalizeRoutePoints(points) {
+      const list = Array.isArray(points) ? points : [];
+      const normalized = list
+        .map((point) => {
+          if (!point) return null;
+          const lat = Number(point.lat);
+          const lng = Number(point.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+          const timestampiso = String(point.timestampiso || point.key || '');
+          const date = point.date instanceof Date ? point.date : toDateSafe(timestampiso);
+          if (!date) return null;
+
+          return {
+            ...point,
+            key: point.key || timestampiso,
+            lat,
+            lng,
+            speed: Number.isFinite(Number(point.speed)) ? Number(point.speed) : null,
+            accuracy: Number.isFinite(Number(point.accuracy)) ? Number(point.accuracy) : null,
+            timestampiso,
+            date,
+            raw: point.raw ?? null,
+            pointNo: 0,
+            segmentMeters: 0,
+            cumulativeMeters: 0,
+            cumulativeKm: 0,
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => {
+          const ta = a.date ? a.date.getTime() : 0;
+          const tb = b.date ? b.date.getTime() : 0;
+          return ta - tb;
+        });
+
+      normalized.forEach((p, idx) => {
+        p.pointNo = idx + 1;
+        if (idx === 0) {
+          p.segmentMeters = 0;
+          p.cumulativeMeters = 0;
+        } else {
+          const prev = normalized[idx - 1];
+          p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
+        }
+        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
+      });
+
+      return normalized;
+    },
+    async fetchTodayRouteForVehicle(vehicleId) {
+      if (!this.initFirebase()) return [];
+
+      try {
+        const { startKey, endKey } = getTodayKeyRange();
+        const snap = await firebaseDb
+          .ref(`locations/${vehicleId}`)
+          .orderByKey()
+          .startAt(startKey)
+          .endAt(endKey)
+          .once('value');
+
+        const points = this.parseVehicleSnapshot(snap);
+        if (points.length) {
+          this.setRouteCacheForVehicle(vehicleId, points);
+        }
+        return points;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`ดึงข้อมูลวันนี้ของรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`, 'warn');
+        return [];
+      }
+    },
+    parseLatestPointSnapshot(snapshot) {
+      const points = this.parseVehicleSnapshot(snapshot);
+      return points[points.length - 1] || null;
+    },
+    mergeLivePoint(vehicleId, point) {
+      if (!point) return false;
+
+      const current = this.routePointCacheByVehicle[vehicleId] || [];
+      if (current.some((item) => this.pointsMatch(item, point))) {
+        return false;
+      }
+
+      const next = this.normalizeRoutePoints(current.concat(point));
+      this.routePointCacheByVehicle[vehicleId] = next.slice();
+      writeRouteCache(vehicleId, next, new Date());
+      return true;
+    },
 
     parseVehicleSnapshot(vehicleSnapshot) {
       const points = [];
@@ -1118,13 +1356,20 @@ ${this.healthState.action}`,
       return points;
     },
     detachLiveListener() {
-      if (liveRef && liveCallback) {
+      Object.entries(vehicleLiveRefs).forEach(([vehicleId, ref]) => {
+        const callback = vehicleLiveCallbacks[vehicleId];
+        if (!ref || !callback) return;
+
         try {
-          liveRef.off("value", liveCallback);
+          ref.off("value", callback);
         } catch (err) {
           console.warn(err);
         }
-      }
+      });
+
+      vehicleLiveRefs = Object.create(null);
+      vehicleLiveCallbacks = Object.create(null);
+
       if (firebaseInfoRef && firebaseInfoCallback) {
         try {
           firebaseInfoRef.off("value", firebaseInfoCallback);
@@ -1132,8 +1377,6 @@ ${this.healthState.action}`,
           console.warn(err);
         }
       }
-      liveRef = null;
-      liveCallback = null;
       firebaseInfoRef = null;
       firebaseInfoCallback = null;
     },
@@ -1156,68 +1399,147 @@ ${this.healthState.action}`,
       this.subscribeFirebaseConnectionState();
       await this.loadVehicleMappings();
 
+      const trackedIds = await this.loadTrackedVehicleIds();
+
       this.loading = true;
       this.firebaseLastError = "";
-      this.setStatus("กำลังโหลดรถวิ่งของวันนี้...", "info");
+      this.setStatus("กำลังโหลดรถวิ่งล่าสุด...", "info");
       this.detachLiveListener();
+      this.ensureRouteCacheDate();
+      this.routePointCacheByVehicle = Object.create(null);
 
-      liveRef = firebaseDb.ref("locations");
-      liveCallback = (snapshot) => {
-        const result = {};
-        const visibleIds = new Set();
-
-        snapshot.forEach((vehicleNode) => {
-          const vehicleId = String(vehicleNode.key || "").trim();
-          if (!vehicleId) return;
-
-          const points = this.parseVehicleSnapshot(vehicleNode);
-          if (!points.length) return;
-
-          const latest = points[points.length - 1];
-          result[vehicleId] = {
-            points,
-            lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-          };
-          visibleIds.add(vehicleId);
-        });
-
-        this.vehiclesById = result;
-        this.lastSnapshotAt = new Date().toISOString();
-
-        Object.keys(this.visibleVehicles).forEach((vehicleId) => {
-          if (!visibleIds.has(vehicleId)) delete this.visibleVehicles[vehicleId];
-        });
-
-        Object.keys(result).forEach((vehicleId) => {
-          if (!(vehicleId in this.visibleVehicles)) this.visibleVehicles[vehicleId] = true;
-        });
-
-        this.lastRefreshAt = new Date().toISOString();
-        this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+      if (!trackedIds.length) {
+        this.vehiclesById = {};
         this.loading = false;
-
-        const count = Object.keys(result).length;
-        if (count) {
-          this.noDataToday = false;
-          this.noDataCheckedAt = new Date().toISOString();
-          this.noDataNotifiedFor = "";
-          this.firebaseLastError = "";
-          this.setStatus(`พบรถวิ่งวันนี้ ${count} คัน`, "ok");
-        } else {
-          this.updateNoDataState(0);
-        }
-
+        this.updateNoDataState(0);
         this.refreshHealthState(true);
+        return;
+      }
+
+      const result = {};
+      const initialPending = new Set(trackedIds);
+      let loadingDoneTimer = null;
+
+      const finalizeLoading = () => {
+        if (loadingDoneTimer) return;
+        loadingDoneTimer = setTimeout(() => {
+          this.loading = false;
+          loadingDoneTimer = null;
+        }, 150);
       };
 
-      liveRef.on("value", liveCallback, (err) => {
-        console.error(err);
-        this.firebaseLastError = `โหลดข้อมูลไม่สำเร็จ: ${err.message || err}`;
-        this.setStatus(this.firebaseLastError, "error");
-        this.loading = false;
-        this.refreshHealthState();
+      await Promise.allSettled(
+        trackedIds.map(async (vehicleId) => {
+          let points = this.loadRouteCacheForVehicle(vehicleId);
+
+          if (!points.length) {
+            points = await this.fetchTodayRouteForVehicle(vehicleId);
+          } else {
+            this.setRouteCacheForVehicle(vehicleId, points);
+          }
+
+          this.routePointCacheByVehicle[vehicleId] = points.slice();
+
+          if (points.length) {
+            const latest = points[points.length - 1] || null;
+            result[vehicleId] = {
+              points: points.slice(),
+              lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+            };
+          }
+        }),
+      );
+
+      this.vehiclesById = { ...result };
+      this.lastRefreshAt = new Date().toISOString();
+      this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+
+      const countAfterInitialLoad = Object.keys(result).length;
+      if (countAfterInitialLoad) {
+        this.noDataToday = false;
+        this.noDataCheckedAt = new Date().toISOString();
+        this.noDataNotifiedFor = "";
+      } else {
+        this.updateNoDataState(0);
+      }
+
+      trackedIds.forEach((vehicleId) => {
+        const ref = firebaseDb
+          .ref(`locations/${vehicleId}`)
+          .orderByKey()
+          .limitToLast(1);
+
+        const callback = (snapshot) => {
+          try {
+            const point = this.parseLatestPointSnapshot(snapshot);
+            if (point) {
+              const changed = this.mergeLivePoint(vehicleId, point);
+              if (changed) {
+                const cache = this.routePointCacheByVehicle[vehicleId] || [];
+                const latest = cache[cache.length - 1] || point;
+                result[vehicleId] = {
+                  points: cache.slice(),
+                  lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+                };
+              }
+            } else if (!this.routePointCacheByVehicle[vehicleId]?.length) {
+              delete result[vehicleId];
+            }
+
+            this.vehiclesById = { ...result };
+            this.lastSnapshotAt = new Date().toISOString();
+
+            Object.keys(this.visibleVehicles).forEach((id) => {
+              if (!(id in result)) delete this.visibleVehicles[id];
+            });
+
+            Object.keys(result).forEach((id) => {
+              if (!(id in this.visibleVehicles)) this.visibleVehicles[id] = true;
+            });
+
+            this.lastRefreshAt = new Date().toISOString();
+            this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+
+            const count = Object.keys(result).length;
+            if (count) {
+              this.noDataToday = false;
+              this.noDataCheckedAt = new Date().toISOString();
+              this.noDataNotifiedFor = "";
+              this.firebaseLastError = "";
+              this.setStatus(`พบรถวิ่งล่าสุด ${count} คัน`, "ok");
+            } else {
+              this.updateNoDataState(0);
+            }
+
+            this.refreshHealthState(true);
+          } catch (err) {
+            console.error(err);
+            this.firebaseLastError = `ประมวลผลข้อมูลไม่สำเร็จ: ${err.message || err}`;
+            this.setStatus(this.firebaseLastError, "error");
+            this.refreshHealthState();
+          } finally {
+            initialPending.delete(vehicleId);
+            if (initialPending.size === 0) {
+              finalizeLoading();
+            }
+          }
+        };
+
+        vehicleLiveRefs[vehicleId] = ref;
+        vehicleLiveCallbacks[vehicleId] = callback;
+
+        ref.on("value", callback, (err) => {
+          console.error(err);
+          this.firebaseLastError = `โหลดข้อมูลรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`;
+          this.setStatus(this.firebaseLastError, "error");
+          initialPending.delete(vehicleId);
+          if (initialPending.size === 0) finalizeLoading();
+          this.loading = false;
+          this.refreshHealthState();
+        });
       });
     },
+
     toggleAllVehicles(show) {
       this.vehicleSummaries.forEach((v) => {
         this.visibleVehicles[v.vehicleId] = show;
