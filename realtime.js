@@ -10,6 +10,11 @@ let vehicleLiveRefs = Object.create(null);
 let vehicleLiveCallbacks = Object.create(null);
 let firebaseInfoRef = null;
 let firebaseInfoCallback = null;
+// เก็บ key ล่าสุดที่ sync แล้วของแต่ละคัน ใช้เป็น cursor ให้ child_added / periodic resync
+// จะได้ไม่ต้องโหลดข้อมูลทั้งวันซ้ำทุกครั้ง (ไม่แก้ Firebase schema ใด ๆ)
+let vehicleLastKey = Object.create(null);
+let periodicSyncTimer = null;
+let visibilityChangeHandler = null;
 
 const ROUTE_CACHE_PREFIX = "farmchokchai_realtime_route_cache_v1";
 const ROUTE_CACHE_MAX_POINTS = 6000;
@@ -1280,24 +1285,6 @@ ${this.healthState.action}`,
         return [];
       }
     },
-    parseLatestPointSnapshot(snapshot) {
-      const points = this.parseVehicleSnapshot(snapshot);
-      return points[points.length - 1] || null;
-    },
-    mergeLivePoint(vehicleId, point) {
-      if (!point) return false;
-
-      const current = this.routePointCacheByVehicle[vehicleId] || [];
-      if (current.some((item) => this.pointsMatch(item, point))) {
-        return false;
-      }
-
-      const next = this.normalizeRoutePoints(current.concat(point));
-      this.routePointCacheByVehicle[vehicleId] = next.slice();
-      writeRouteCache(vehicleId, next, new Date());
-      return true;
-    },
-
     parseVehicleSnapshot(vehicleSnapshot) {
       const points = [];
       const { start, end } = getTodayBounds();
@@ -1357,11 +1344,11 @@ ${this.healthState.action}`,
     },
     detachLiveListener() {
       Object.entries(vehicleLiveRefs).forEach(([vehicleId, ref]) => {
-        const callback = vehicleLiveCallbacks[vehicleId];
-        if (!ref || !callback) return;
+        const entry = vehicleLiveCallbacks[vehicleId];
+        if (!ref || !entry) return;
 
         try {
-          ref.off("value", callback);
+          ref.off(entry.type || "value", entry.callback);
         } catch (err) {
           console.warn(err);
         }
@@ -1369,6 +1356,7 @@ ${this.healthState.action}`,
 
       vehicleLiveRefs = Object.create(null);
       vehicleLiveCallbacks = Object.create(null);
+      this.stopPeriodicSync();
 
       if (firebaseInfoRef && firebaseInfoCallback) {
         try {
@@ -1393,6 +1381,201 @@ ${this.healthState.action}`,
         this.healthTimer = null;
       }
     },
+    // รวมชุดข้อมูลใหม่ (จาก server หรือ live event) เข้ากับ cache เดิม โดยอ้างอิง key/timestamp
+    // ห้าม replace ทั้งชุด เพื่อไม่ให้จุดที่เคยมีอยู่แล้วหายไปเวลาข้อมูลใหม่มาไม่ครบ
+    mergePointsIntoCache(vehicleId, incomingPoints) {
+      const current = this.routePointCacheByVehicle[vehicleId] || [];
+      const byKey = new Map();
+      current.forEach((p) => {
+        if (p) byKey.set(p.key || p.timestampiso, p);
+      });
+      (incomingPoints || []).forEach((p) => {
+        if (p) byKey.set(p.key || p.timestampiso, p);
+      });
+
+      const merged = this.normalizeRoutePoints(Array.from(byKey.values()));
+      this.routePointCacheByVehicle[vehicleId] = merged.slice();
+      writeRouteCache(vehicleId, merged, new Date());
+      return merged;
+    },
+
+    buildPointFromRaw(key, value) {
+      const lat = Number(value.lat);
+      const lng = Number(value.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+      const timestampiso = String(value.timestampiso || key || "");
+      const date = toDateSafe(timestampiso);
+      if (!date) return null;
+
+      const { start, end } = getTodayBounds();
+      if (date < start || date > end) return null;
+
+      return {
+        key,
+        lat,
+        lng,
+        speed: Number.isFinite(Number(value.speed_kmh))
+          ? Number(value.speed_kmh)
+          : Number.isFinite(Number(value.speed))
+            ? Number(value.speed)
+            : null,
+        accuracy: Number.isFinite(Number(value.accuracy)) ? Number(value.accuracy) : null,
+        timestampiso,
+        date,
+        raw: value,
+        pointNo: 0,
+        segmentMeters: 0,
+        cumulativeMeters: 0,
+        cumulativeKm: 0,
+      };
+    },
+
+    // Sync ข้อมูลของวันนี้จาก Firebase จริง (source of truth) แล้ว merge เข้ากับ cache
+    // ใช้ query เดิม (orderByKey + startAt/endAt) ไม่แตะ schema
+    async syncVehicleFromServer(vehicleId, result) {
+      const points = await this.fetchTodayRouteForVehicle(vehicleId);
+      if (!points.length) return;
+
+      const merged = this.mergePointsIntoCache(vehicleId, points);
+      const latest = merged[merged.length - 1] || null;
+      if (latest) vehicleLastKey[vehicleId] = latest.key;
+
+      result[vehicleId] = {
+        points: merged.slice(),
+        lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+      };
+    },
+
+    // ฟัง child_added ต่อจาก key ล่าสุดที่ sync แล้ว แทน limitToLast(1)+value เดิม
+    // เพราะ child_added จะ "ไล่เก็บ" ทุกจุดที่พลาดไประหว่างหลุดการเชื่อมต่อให้อัตโนมัติ
+    attachChildAddedListener(vehicleId, result) {
+      let ref = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
+      const startKey = vehicleLastKey[vehicleId];
+      if (startKey) ref = ref.startAt(startKey);
+
+      const callback = (snapshot) => {
+        try {
+          const key = snapshot.key;
+          if (startKey && key === startKey) return; // startAt ครอบคลุม key เดิมด้วย (inclusive) ข้ามจุดซ้ำ
+
+          const point = this.buildPointFromRaw(key, snapshot.val() || {});
+          if (!point) return;
+
+          const merged = this.mergePointsIntoCache(vehicleId, [point]);
+          const latest = merged[merged.length - 1] || point;
+          vehicleLastKey[vehicleId] = latest.key;
+
+          result[vehicleId] = {
+            points: merged.slice(),
+            lastSeenAt: latest.date ? latest.date.toISOString() : new Date().toISOString(),
+          };
+
+          this.vehiclesById = { ...result };
+          this.lastSnapshotAt = new Date().toISOString();
+          this.lastRefreshAt = new Date().toISOString();
+          this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+
+          Object.keys(this.visibleVehicles).forEach((id) => {
+            if (!(id in result)) delete this.visibleVehicles[id];
+          });
+          Object.keys(result).forEach((id) => {
+            if (!(id in this.visibleVehicles)) this.visibleVehicles[id] = true;
+          });
+
+          this.noDataToday = false;
+          this.noDataCheckedAt = new Date().toISOString();
+          this.noDataNotifiedFor = "";
+          this.firebaseLastError = "";
+          this.setStatus(`พบรถวิ่งล่าสุด ${Object.keys(result).length} คัน`, "ok");
+          this.refreshHealthState(true);
+        } catch (err) {
+          console.error(err);
+          this.firebaseLastError = `ประมวลผลข้อมูลไม่สำเร็จ: ${err.message || err}`;
+          this.setStatus(this.firebaseLastError, "error");
+          this.refreshHealthState();
+        }
+      };
+
+      const errorHandler = (err) => {
+        console.error(err);
+        this.firebaseLastError = `subscribe รถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`;
+        this.setStatus(this.firebaseLastError, "error");
+        this.refreshHealthState();
+      };
+
+      ref.on("child_added", callback, errorHandler);
+      vehicleLiveRefs[vehicleId] = ref;
+      vehicleLiveCallbacks[vehicleId] = { type: "child_added", callback };
+    },
+
+    // Sync สำรองเป็นระยะ + ตอนกลับมาที่แท็บ (visibilitychange) เผื่อ child_added หลุด
+    // เช่น มือถือพักหน้าจอ/สลับแอปนาน ๆ โดยไม่ Refresh หน้าเว็บ
+    startPeriodicSync(trackedIds, result) {
+      this.stopPeriodicSync();
+
+      periodicSyncTimer = setInterval(() => {
+        this.runPeriodicResync(trackedIds, result);
+      }, 45000);
+
+      visibilityChangeHandler = () => {
+        if (document.visibilityState === "visible") {
+          this.runPeriodicResync(trackedIds, result);
+        }
+      };
+      document.addEventListener("visibilitychange", visibilityChangeHandler);
+    },
+
+    stopPeriodicSync() {
+      if (periodicSyncTimer) {
+        clearInterval(periodicSyncTimer);
+        periodicSyncTimer = null;
+      }
+      if (visibilityChangeHandler) {
+        document.removeEventListener("visibilitychange", visibilityChangeHandler);
+        visibilityChangeHandler = null;
+      }
+    },
+
+    async runPeriodicResync(trackedIds, result) {
+      if (!firebaseDb) return;
+
+      await Promise.allSettled(
+        trackedIds.map(async (vehicleId) => {
+          const cursorKey = vehicleLastKey[vehicleId];
+          try {
+            let query = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
+            // ถ้ายังไม่เคยมี key ล่าสุดเลย (ไม่น่าเกิดหลัง sync รอบแรก) กันไว้ไม่ให้โหลดทั้งวันซ้ำ
+            query = cursorKey ? query.startAt(cursorKey) : query.limitToLast(200);
+            const snap = await query.once("value");
+
+            const raw = [];
+            snap.forEach((child) => {
+              const point = this.buildPointFromRaw(child.key, child.val() || {});
+              if (point && point.key !== cursorKey) raw.push(point);
+            });
+            if (!raw.length) return;
+
+            const merged = this.mergePointsIntoCache(vehicleId, raw);
+            const latest = merged[merged.length - 1] || null;
+            if (latest) vehicleLastKey[vehicleId] = latest.key;
+
+            result[vehicleId] = {
+              points: merged.slice(),
+              lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+            };
+          } catch (err) {
+            console.warn(`periodic resync failed for ${vehicleId}`, err);
+          }
+        }),
+      );
+
+      this.vehiclesById = { ...result };
+      this.lastRefreshAt = new Date().toISOString();
+      this.scheduleRenderRoute();
+      this.refreshHealthState(true);
+    },
+
     async subscribeTodayLive() {
       if (!this.initFirebase()) return;
 
@@ -1407,6 +1590,7 @@ ${this.healthState.action}`,
       this.detachLiveListener();
       this.ensureRouteCacheDate();
       this.routePointCacheByVehicle = Object.create(null);
+      vehicleLastKey = Object.create(null);
 
       if (!trackedIds.length) {
         this.vehiclesById = {};
@@ -1417,42 +1601,36 @@ ${this.healthState.action}`,
       }
 
       const result = {};
-      const initialPending = new Set(trackedIds);
-      let loadingDoneTimer = null;
 
-      const finalizeLoading = () => {
-        if (loadingDoneTimer) return;
-        loadingDoneTimer = setTimeout(() => {
-          this.loading = false;
-          loadingDoneTimer = null;
-        }, 150);
-      };
+      // 1) แสดงผลจาก cache (localStorage) ก่อนแบบชั่วคราว เพื่อไม่ให้หน้าจอว่างระหว่างรอ sync จริง
+      trackedIds.forEach((vehicleId) => {
+        const cached = this.loadRouteCacheForVehicle(vehicleId);
+        if (!cached.length) return;
 
+        this.routePointCacheByVehicle[vehicleId] = cached.slice();
+        const latest = cached[cached.length - 1];
+        result[vehicleId] = {
+          points: cached.slice(),
+          lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+        };
+        vehicleLastKey[vehicleId] = latest?.key || null;
+      });
+
+      if (Object.keys(result).length) {
+        this.vehiclesById = { ...result };
+        this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+        this.setStatus("แสดงข้อมูลจาก cache ชั่วคราว กำลังซิงก์กับ Firebase...", "info");
+      }
+
+      // 2) Sync ทันทีจาก Firebase (ของจริง วันนี้ทั้งหมด) แล้ว merge เข้ากับ cache แบบไม่ replace ทั้งชุด
       await Promise.allSettled(
-        trackedIds.map(async (vehicleId) => {
-          let points = this.loadRouteCacheForVehicle(vehicleId);
-
-          if (!points.length) {
-            points = await this.fetchTodayRouteForVehicle(vehicleId);
-          } else {
-            this.setRouteCacheForVehicle(vehicleId, points);
-          }
-
-          this.routePointCacheByVehicle[vehicleId] = points.slice();
-
-          if (points.length) {
-            const latest = points[points.length - 1] || null;
-            result[vehicleId] = {
-              points: points.slice(),
-              lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-            };
-          }
-        }),
+        trackedIds.map((vehicleId) => this.syncVehicleFromServer(vehicleId, result)),
       );
 
       this.vehiclesById = { ...result };
       this.lastRefreshAt = new Date().toISOString();
       this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+      this.loading = false;
 
       const countAfterInitialLoad = Object.keys(result).length;
       if (countAfterInitialLoad) {
@@ -1463,81 +1641,13 @@ ${this.healthState.action}`,
         this.updateNoDataState(0);
       }
 
+      // 3) ผูก child_added ต่อจาก key ล่าสุดที่ sync แล้ว สำหรับรับข้อมูลใหม่แบบ realtime
       trackedIds.forEach((vehicleId) => {
-        const ref = firebaseDb
-          .ref(`locations/${vehicleId}`)
-          .orderByKey()
-          .limitToLast(1);
-
-        const callback = (snapshot) => {
-          try {
-            const point = this.parseLatestPointSnapshot(snapshot);
-            if (point) {
-              const changed = this.mergeLivePoint(vehicleId, point);
-              if (changed) {
-                const cache = this.routePointCacheByVehicle[vehicleId] || [];
-                const latest = cache[cache.length - 1] || point;
-                result[vehicleId] = {
-                  points: cache.slice(),
-                  lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-                };
-              }
-            } else if (!this.routePointCacheByVehicle[vehicleId]?.length) {
-              delete result[vehicleId];
-            }
-
-            this.vehiclesById = { ...result };
-            this.lastSnapshotAt = new Date().toISOString();
-
-            Object.keys(this.visibleVehicles).forEach((id) => {
-              if (!(id in result)) delete this.visibleVehicles[id];
-            });
-
-            Object.keys(result).forEach((id) => {
-              if (!(id in this.visibleVehicles)) this.visibleVehicles[id] = true;
-            });
-
-            this.lastRefreshAt = new Date().toISOString();
-            this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
-
-            const count = Object.keys(result).length;
-            if (count) {
-              this.noDataToday = false;
-              this.noDataCheckedAt = new Date().toISOString();
-              this.noDataNotifiedFor = "";
-              this.firebaseLastError = "";
-              this.setStatus(`พบรถวิ่งล่าสุด ${count} คัน`, "ok");
-            } else {
-              this.updateNoDataState(0);
-            }
-
-            this.refreshHealthState(true);
-          } catch (err) {
-            console.error(err);
-            this.firebaseLastError = `ประมวลผลข้อมูลไม่สำเร็จ: ${err.message || err}`;
-            this.setStatus(this.firebaseLastError, "error");
-            this.refreshHealthState();
-          } finally {
-            initialPending.delete(vehicleId);
-            if (initialPending.size === 0) {
-              finalizeLoading();
-            }
-          }
-        };
-
-        vehicleLiveRefs[vehicleId] = ref;
-        vehicleLiveCallbacks[vehicleId] = callback;
-
-        ref.on("value", callback, (err) => {
-          console.error(err);
-          this.firebaseLastError = `โหลดข้อมูลรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`;
-          this.setStatus(this.firebaseLastError, "error");
-          initialPending.delete(vehicleId);
-          if (initialPending.size === 0) finalizeLoading();
-          this.loading = false;
-          this.refreshHealthState();
-        });
+        this.attachChildAddedListener(vehicleId, result);
       });
+
+      // 4) Sync สำรองเป็นระยะ + ตอนกลับมาที่แท็บ เผื่อ listener หลุด/บราวเซอร์ throttle หน้าที่พักไว้นาน
+      this.startPeriodicSync(trackedIds, result);
     },
 
     toggleAllVehicles(show) {
