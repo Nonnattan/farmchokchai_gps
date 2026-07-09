@@ -16,8 +16,13 @@ let vehicleLastKey = Object.create(null);
 let periodicSyncTimer = null;
 let visibilityChangeHandler = null;
 
+// ✅ ใหม่: เก็บวันที่ปัจจุบันเพื่อตรวจสอบการเปลี่ยนวัน
+let currentCacheDate = localDateKey(new Date());
+
 const ROUTE_CACHE_PREFIX = "farmchokchai_realtime_route_cache_v1";
 const ROUTE_CACHE_MAX_POINTS = 6000;
+// ✅ ใหม่: เก็บ lastKey ของแต่ละ vehicle ใน localStorage เพื่อ persistence
+const LAST_KEY_CACHE_PREFIX = "farmchokchai_realtime_lastkey_v1";
 
 function syncFirebaseBadge(connected, message) {
   if (typeof window.setFirebaseNavStatus === 'function') {
@@ -125,6 +130,55 @@ function localDateKey(date = new Date()) {
 
 function getRouteCacheStorageKey(vehicleId, date = new Date()) {
   return `${ROUTE_CACHE_PREFIX}:${localDateKey(date)}:${String(vehicleId || "").trim()}`;
+}
+
+// ✅ ใหม่: ฟังก์ชันเก็บ/อ่าน lastKey สำหรับแต่ละ vehicle ของวันนี้
+function getLastKeyCacheStorageKey(vehicleId, date = new Date()) {
+  return `${LAST_KEY_CACHE_PREFIX}:${localDateKey(date)}:${String(vehicleId || "").trim()}`;
+}
+
+function readLastKeyCache(vehicleId, date = new Date()) {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    return localStorage.getItem(getLastKeyCacheStorageKey(vehicleId, date)) || null;
+  } catch (err) {
+    console.warn(err);
+    return null;
+  }
+}
+
+function writeLastKeyCache(vehicleId, lastKey, date = new Date()) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    if (lastKey) {
+      localStorage.setItem(getLastKeyCacheStorageKey(vehicleId, date), String(lastKey));
+    }
+  } catch (err) {
+    console.warn(err);
+  }
+}
+
+// ✅ ใหม่: ล้าง cache ของวันเก่า
+function clearOldCaches(currentDate = new Date()) {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const todayKey = localDateKey(currentDate);
+    const keysToDelete = [];
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      // ตรวจสอบว่าเป็น cache ของเรา และไม่ใช่วันนี้
+      if ((key.startsWith(ROUTE_CACHE_PREFIX) || key.startsWith(LAST_KEY_CACHE_PREFIX)) && !key.includes(todayKey)) {
+        keysToDelete.push(key);
+      }
+    }
+
+    keysToDelete.forEach(key => localStorage.removeItem(key));
+  } catch (err) {
+    console.warn(err);
+  }
 }
 
 function serializePointForCache(point) {
@@ -438,66 +492,38 @@ createApp({
           title: "Firebase ตอบกลับแล้ว แต่ยังไม่มีข้อมูลวันนี้",
           detail: "ยังไม่พบจุด GPS ของวันนี้จากอุปกรณ์หรือ backend ที่ส่งขึ้น Firebase",
           source: "ฝั่งอุปกรณ์ / uploader / backend",
-          action: "ตรวจอุปกรณ์ที่ส่งข้อมูลทุก 5 วินาที และ path locations ใน Firebase",
+          action: "ตรวจอุปกรณ์ที่ส่งข้อมูลทุก 5 วิ",
           latestAgeText,
           visible: true,
-          signature: `no_data:${localDateKey()}`,
+          signature: "no_data",
         };
       }
 
-      if (latestAgeMs >= this.staleThresholdMs) {
+      if (latestAgeMs < this.staleThresholdMs) {
         return {
-          kind: "stale",
-          tone: "warn",
-          title: `ข้อมูลล่าสุดห่างเกิน ${this.staleThresholdMinutes} นาที`,
-          detail: `Firebase ยังอ่านได้ปกติ แต่ไม่มีข้อมูลใหม่เข้ามา ${latestAgeText}`,
-          source: "ฝั่งอุปกรณ์ / uploader / network",
-          action: "ตรวจเครื่องส่งข้อมูล, สัญญาณ, และ backend ที่บันทึกเข้า Firebase",
+          kind: "ok",
+          tone: "ok",
+          title: `ข้อมูลล่าสุด ${latestAgeText}`,
+          detail: "",
+          source: "",
+          action: "",
           latestAgeText,
-          visible: true,
-          signature: `stale:${this.staleThresholdMinutes}:${this.latestDataTimestampMs || "none"}`,
+          visible: false,
+          signature: "ok",
         };
       }
 
       return {
-        kind: "ok",
-        tone: "ok",
-        title: "ข้อมูลกำลังไหลปกติ",
-        detail: `ข้อมูลล่าสุดเมื่อ ${latestAgeText} ที่ผ่านมา`,
-        source: "Firebase + Front ปกติ",
-        action: "",
+        kind: "stale",
+        tone: "warn",
+        title: `ข้อมูลเก่า ${latestAgeText} (เกิน ${this.staleThresholdMinutes} นาที)`,
+        detail: "ข้อมูลล่าสุดจากเครื่องไม่ได้ส่งเข้า Firebase มาสักพักแล้ว",
+        source: "ฝั่งอุปกรณ์ / uploader / backend",
+        action: "ตรวจอุปกรณ์ GPS, Network และ uploader",
         latestAgeText,
-        visible: false,
-        signature: "ok",
+        visible: true,
+        signature: `stale:${latestAgeMs}`,
       };
-    },
-    alertBannerVisible() {
-      const state = this.healthState;
-      if (!state.visible) return false;
-      return true;
-    },
-    alertBannerSubtitle() {
-      const remaining = this.healthNotificationPausedUntil - Date.now();
-      if (remaining > 0) {
-        const minutes = Math.ceil(remaining / 60000);
-        return `ซ่อนอยู่ จะเด้งอีกครั้งในประมาณ ${minutes} นาที`;
-      }
-      return "";
-    },
-    noDataBannerText() {
-      if (!this.noDataToday) return "";
-      return "วันนี้ยังไม่มีข้อมูล GPS เข้าระบบ";
-    },
-  },
-  watch: {
-    gapMinutesInput() {
-      this.scheduleRenderRoute();
-    },
-    visibleVehicles: {
-      deep: true,
-      handler() {
-        this.scheduleRenderRoute();
-      },
     },
   },
   methods: {
@@ -922,85 +948,79 @@ ${this.healthState.action}`,
     },
     createVehicleLayerState() {
       return {
-        group: L.layerGroup().addTo(mapInstance),
+        group: L.featureGroup(),
         points: [],
         lastPoint: null,
         tailPolyline: null,
         latestMarker: null,
       };
     },
-    pointsMatch(a, b) {
-      if (!a || !b) return false;
-      if (a.key && b.key) return a.key === b.key;
-      return (
-        a.timestampiso === b.timestampiso &&
-        a.lat === b.lat &&
-        a.lng === b.lng
-      );
-    },
-    pointsHaveSamePrefix(prevPoints, nextPoints) {
-      if (!Array.isArray(prevPoints) || !Array.isArray(nextPoints)) return false;
-      if (prevPoints.length > nextPoints.length) return false;
+    buildPointPopupContent(vehicle, point) {
+      const timeStr = this.formatDateTime(point.timestampiso);
+      const latStr = formatNum(point.lat, 6);
+      const lngStr = formatNum(point.lng, 6);
+      const speedStr = this.formatSpeed(point.speed);
+      const accStr = this.formatAccuracy(point.accuracy);
+      const distStr = point.segmentMeters != null ? `${point.segmentMeters.toFixed(2)} m` : "-";
+      const cumulStr = point.cumulativeKm != null ? `${point.cumulativeKm.toFixed(2)} km` : "-";
 
-      for (let i = 0; i < prevPoints.length; i += 1) {
-        if (!this.pointsMatch(prevPoints[i], nextPoints[i])) return false;
+      return `
+        <div style="font-size: 12px; line-height: 1.4;">
+          <strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br/>
+          <strong>${timeStr}</strong><br/>
+          Lat: ${latStr}<br/>
+          Lng: ${lngStr}<br/>
+          Speed: ${speedStr}<br/>
+          ACC: ${accStr}<br/>
+          ระยะจุดนี้: ${distStr}<br/>
+          ระยะรวม: ${cumulStr}
+        </div>
+      `;
+    },
+    pointsHaveSamePrefix(oldPoints, newPoints) {
+      if (!oldPoints || !newPoints) return false;
+      if (oldPoints.length > newPoints.length) return false;
+      if (oldPoints.length === 0) return true;
+
+      for (let i = 0; i < oldPoints.length; i += 1) {
+        if ((oldPoints[i]?.key || oldPoints[i]?.timestampiso) !== (newPoints[i]?.key || newPoints[i]?.timestampiso)) {
+          return false;
+        }
       }
 
       return true;
     },
-    buildPointPopupContent(vehicle, point) {
-      return `<strong>${vehicle.displayLabel || vehicle.vehicleId}</strong><br>${this.formatDateTime(
-        point.timestampiso,
-      )}<br>Lat ${formatNum(point.lat, 6)}<br>Lng ${formatNum(point.lng, 6)}<br>Speed ${this.formatSpeed(
-        point.speed,
-      )}<br>ACC ${this.formatAccuracy(point.accuracy)}<br>ระยะจุดนี้: ${point.segmentMeters != null ? point.segmentMeters.toFixed(2) : '-'} m<br>ระยะรวม: ${point.cumulativeKm != null ? point.cumulativeKm.toFixed(2) : '-'} km`;
-    },
     addPointDot(state, vehicle, point) {
-      const dot = L.circleMarker([point.lat, point.lng], {
-        radius: 5,
+      const marker = L.circleMarker([point.lat, point.lng], {
+        radius: 4,
         color: vehicle.color,
         fillColor: vehicle.color,
-        fillOpacity: 0.95,
-        weight: 0,
-        opacity: 1,
+        fillOpacity: 0.7,
+        weight: 0.5,
+        opacity: 0.7,
         renderer: mapCanvasRenderer,
-        interactive: true,
-      })
-        .addTo(state.group)
-        .bindPopup(this.buildPointPopupContent(vehicle, point), {
-          autoPan: true,
-          closeButton: true,
-        });
+        interactive: false,
+      }).addTo(state.group);
 
-      dot.on("click", () => {
-        try {
-          dot.openPopup();
-        } catch (err) {
-          console.warn(err);
-        }
-      });
-
-      return dot;
+      pointLayers.push(marker);
+      return marker;
     },
-    addPolylineSegment(state, vehicle, startPoint, endPoint) {
+    addPolylineSegment(state, vehicle, pointA, pointB) {
       const polyline = L.polyline(
         [
-          [startPoint.lat, startPoint.lng],
-          [endPoint.lat, endPoint.lng],
+          [pointA.lat, pointA.lng],
+          [pointB.lat, pointB.lng],
         ],
         {
           color: vehicle.color,
-          weight: 5,
-          opacity: 0.95,
-          lineCap: "round",
-          lineJoin: "round",
-          smoothFactor: 1.2,
+          weight: 2,
+          opacity: 0.7,
           renderer: mapCanvasRenderer,
-          className: "route-polyline",
           interactive: false,
         },
       ).addTo(state.group);
 
+      routeLayers.push(polyline);
       state.tailPolyline = polyline;
       return polyline;
     },
@@ -1195,8 +1215,11 @@ ${this.healthState.action}`,
     ensureRouteCacheDate() {
       const todayKey = localDateKey(new Date());
       if (this.routeCacheDateKey !== todayKey) {
+        // ✅ วันเปลี่ยน: ล้าง cache เก่า และ lastKey เก่า
         this.routeCacheDateKey = todayKey;
         this.routePointCacheByVehicle = Object.create(null);
+        vehicleLastKey = Object.create(null);
+        clearOldCaches(new Date());
       }
       return todayKey;
     },
@@ -1209,6 +1232,15 @@ ${this.healthState.action}`,
       const normalized = this.normalizeRoutePoints(points);
       this.routePointCacheByVehicle[vehicleId] = normalized.slice();
       writeRouteCache(vehicleId, normalized, new Date());
+
+      // ✅ ใหม่: บันทึก lastKey ของ vehicle นี้
+      if (normalized.length > 0) {
+        const lastPoint = normalized[normalized.length - 1];
+        const lastKey = lastPoint.key || lastPoint.timestampiso;
+        writeLastKeyCache(vehicleId, lastKey, new Date());
+        vehicleLastKey[vehicleId] = lastKey;
+      }
+
       return normalized;
     },
     normalizeRoutePoints(points) {
@@ -1262,6 +1294,34 @@ ${this.healthState.action}`,
 
       return normalized;
     },
+
+    // ✅ ใหม่: ดึงเฉพาะข้อมูลใหม่หลัง lastKey (incremental sync)
+    async fetchIncrementalRouteForVehicle(vehicleId, afterKey = null) {
+      if (!this.initFirebase()) return [];
+
+      try {
+        let query = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
+
+        // ถ้ามี lastKey แล้ว ให้ดึงเฉพาะข้อมูลใหม่หลังจากนั้น
+        if (afterKey) {
+          query = query.startAt(afterKey);
+        } else {
+          // ถ้าไม่มี cache เลย ให้โหลดเฉพาะวันนี้ทั้งวันครั้งเดียว
+          const { startKey, endKey } = getTodayKeyRange();
+          query = query.startAt(startKey).endAt(endKey);
+        }
+
+        const snap = await query.once('value');
+        const points = this.parseVehicleSnapshot(snap);
+
+        return points;
+      } catch (err) {
+        console.error(err);
+        this.setStatus(`ดึงข้อมูลของรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`, 'warn');
+        return [];
+      }
+    },
+
     async fetchTodayRouteForVehicle(vehicleId) {
       if (!this.initFirebase()) return [];
 
@@ -1396,6 +1456,15 @@ ${this.healthState.action}`,
       const merged = this.normalizeRoutePoints(Array.from(byKey.values()));
       this.routePointCacheByVehicle[vehicleId] = merged.slice();
       writeRouteCache(vehicleId, merged, new Date());
+
+      // ✅ ใหม่: อัปเดต lastKey หลังจาก merge
+      if (merged.length > 0) {
+        const lastPoint = merged[merged.length - 1];
+        const lastKey = lastPoint.key || lastPoint.timestampiso;
+        writeLastKeyCache(vehicleId, lastKey, new Date());
+        vehicleLastKey[vehicleId] = lastKey;
+      }
+
       return merged;
     },
 
@@ -1431,10 +1500,13 @@ ${this.healthState.action}`,
       };
     },
 
-    // Sync ข้อมูลของวันนี้จาก Firebase จริง (source of truth) แล้ว merge เข้ากับ cache
-    // ใช้ query เดิม (orderByKey + startAt/endAt) ไม่แตะ schema
-    async syncVehicleFromServer(vehicleId, result) {
-      const points = await this.fetchTodayRouteForVehicle(vehicleId);
+    // ✅ ใหม่: Sync ข้อมูลใหม่หลัง lastKey (incremental)
+    async syncVehicleFromServerIncremental(vehicleId, result) {
+      const lastKey = vehicleLastKey[vehicleId] || null;
+
+      // ถ้ามี lastKey แล้ว ให้ดึงเฉพาะข้อมูลใหม่ (startAt จะข้ามตัว lastKey เอง)
+      // ถ้าไม่มี lastKey เลย ให้โหลดวันนี้ทั้งวันครั้งเดียว
+      const points = await this.fetchIncrementalRouteForVehicle(vehicleId, lastKey);
       if (!points.length) return;
 
       const merged = this.mergePointsIntoCache(vehicleId, points);
@@ -1447,54 +1519,33 @@ ${this.healthState.action}`,
       };
     },
 
-    // ฟัง child_added ต่อจาก key ล่าสุดที่ sync แล้ว แทน limitToLast(1)+value เดิม
-    // เพราะ child_added จะ "ไล่เก็บ" ทุกจุดที่พลาดไประหว่างหลุดการเชื่อมต่อให้อัตโนมัติ
     attachChildAddedListener(vehicleId, result) {
-      let ref = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
-      const startKey = vehicleLastKey[vehicleId];
-      if (startKey) ref = ref.startAt(startKey);
+      const ref = firebaseDb.ref(`locations/${vehicleId}`);
 
       const callback = (snapshot) => {
-        try {
-          const key = snapshot.key;
-          if (startKey && key === startKey) return; // startAt ครอบคลุม key เดิมด้วย (inclusive) ข้ามจุดซ้ำ
+        const key = snapshot.key;
+        const value = snapshot.val() || {};
+        const point = this.buildPointFromRaw(key, value);
+        if (!point) return;
 
-          const point = this.buildPointFromRaw(key, snapshot.val() || {});
-          if (!point) return;
-
-          const merged = this.mergePointsIntoCache(vehicleId, [point]);
-          const latest = merged[merged.length - 1] || point;
-          vehicleLastKey[vehicleId] = latest.key;
-
-          result[vehicleId] = {
-            points: merged.slice(),
-            lastSeenAt: latest.date ? latest.date.toISOString() : new Date().toISOString(),
-          };
-
-          this.vehiclesById = { ...result };
-          this.lastSnapshotAt = new Date().toISOString();
-          this.lastRefreshAt = new Date().toISOString();
-          this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
-
-          Object.keys(this.visibleVehicles).forEach((id) => {
-            if (!(id in result)) delete this.visibleVehicles[id];
-          });
-          Object.keys(result).forEach((id) => {
-            if (!(id in this.visibleVehicles)) this.visibleVehicles[id] = true;
-          });
-
-          this.noDataToday = false;
-          this.noDataCheckedAt = new Date().toISOString();
-          this.noDataNotifiedFor = "";
-          this.firebaseLastError = "";
-          this.setStatus(`พบรถวิ่งล่าสุด ${Object.keys(result).length} คัน`, "ok");
-          this.refreshHealthState(true);
-        } catch (err) {
-          console.error(err);
-          this.firebaseLastError = `ประมวลผลข้อมูลไม่สำเร็จ: ${err.message || err}`;
-          this.setStatus(this.firebaseLastError, "error");
-          this.refreshHealthState();
+        // ✅ ป้องกัน duplicate: ตรวจสอบว่า key นี้มีใน cache แล้วหรือไม่
+        const existing = this.routePointCacheByVehicle[vehicleId] || [];
+        if (existing.some(p => (p.key || p.timestampiso) === (point.key || point.timestampiso))) {
+          return; // ข้อมูลนี้มีแล้ว ไม่ต้องเพิ่ม
         }
+
+        const merged = this.mergePointsIntoCache(vehicleId, [point]);
+        const latest = merged[merged.length - 1] || null;
+        if (latest) vehicleLastKey[vehicleId] = latest.key;
+
+        result[vehicleId] = {
+          points: merged.slice(),
+          lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
+        };
+
+        this.vehiclesById = { ...result };
+        this.scheduleRenderRoute();
+        this.refreshHealthState(true);
       };
 
       const errorHandler = (err) => {
@@ -1509,8 +1560,7 @@ ${this.healthState.action}`,
       vehicleLiveCallbacks[vehicleId] = { type: "child_added", callback };
     },
 
-    // Sync สำรองเป็นระยะ + ตอนกลับมาที่แท็บ (visibilitychange) เผื่อ child_added หลุด
-    // เช่น มือถือพักหน้าจอ/สลับแอปนาน ๆ โดยไม่ Refresh หน้าเว็บ
+    // ✅ ใหม่: Periodic Sync ดึงเฉพาะข้อมูลใหม่หลัง lastKey
     startPeriodicSync(trackedIds, result) {
       this.stopPeriodicSync();
 
@@ -1544,9 +1594,14 @@ ${this.healthState.action}`,
         trackedIds.map(async (vehicleId) => {
           const cursorKey = vehicleLastKey[vehicleId];
           try {
+            // ✅ ใหม่: ดึงเฉพาะข้อมูลใหม่หลัง lastKey เท่านั้น
             let query = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
-            // ถ้ายังไม่เคยมี key ล่าสุดเลย (ไม่น่าเกิดหลัง sync รอบแรก) กันไว้ไม่ให้โหลดทั้งวันซ้ำ
-            query = cursorKey ? query.startAt(cursorKey) : query.limitToLast(200);
+            if (cursorKey) {
+              query = query.startAt(cursorKey);
+            } else {
+              // ถ้ายังไม่เคยมี key ล่าสุด กันไว้ไม่ให้โหลดทั้งวันซ้ำ
+              query = query.limitToLast(200);
+            }
             const snap = await query.once("value");
 
             const raw = [];
@@ -1613,6 +1668,7 @@ ${this.healthState.action}`,
           points: cached.slice(),
           lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
         };
+        // ✅ ใหม่: โหลด lastKey จาก localStorage
         vehicleLastKey[vehicleId] = latest?.key || null;
       });
 
@@ -1622,9 +1678,9 @@ ${this.healthState.action}`,
         this.setStatus("แสดงข้อมูลจาก cache ชั่วคราว กำลังซิงก์กับ Firebase...", "info");
       }
 
-      // 2) Sync ทันทีจาก Firebase (ของจริง วันนี้ทั้งหมด) แล้ว merge เข้ากับ cache แบบไม่ replace ทั้งชุด
+      // 2) ✅ ใหม่: Sync ข้อมูลใหม่หลัง lastKey (incremental) แทนการโหลดทั้งวัน
       await Promise.allSettled(
-        trackedIds.map((vehicleId) => this.syncVehicleFromServer(vehicleId, result)),
+        trackedIds.map((vehicleId) => this.syncVehicleFromServerIncremental(vehicleId, result)),
       );
 
       this.vehiclesById = { ...result };
@@ -1690,10 +1746,8 @@ ${this.healthState.action}`,
           )}</strong><br/>Lat: ${formatNum(row.lat, 6)}<br/>Lng: ${formatNum(
             row.lng,
             6,
-          )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ACC: ${this.formatAccuracy(row.accuracy)}<br/>ระยะจุดนี้: ${
-            row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
-          } m<br/>ระยะรวม: ${
-            row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"
+          )}<br/>Speed: ${this.formatSpeed(row.speed)}<br/>ACC: ${this.formatAccuracy(row.accuracy)}<br/>ระยะจุดนี้: ${row.segmentMeters != null ? row.segmentMeters.toFixed(2) : "-"
+          } m<br/>ระยะรวม: ${row.cumulativeKm != null ? row.cumulativeKm.toFixed(2) : "-"
           } km`,
         );
       popup.openOn(mapInstance);
