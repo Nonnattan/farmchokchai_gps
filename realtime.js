@@ -1420,7 +1420,7 @@ ${this.healthState.action}`,
         // ถ้าไม่มี cache เลย ให้โหลดเฉพาะวันนี้ทั้งวันครั้งเดียว
         const todayKey = localDateKey(new Date());
         const snap = afterKey
-          ? await FQ.fetchAfter(firebaseDb, vehicleId, afterKey)
+          ? await FQ.fetchAfter(firebaseDb, vehicleId, afterKey, todayKey) // จำกัดถึงสิ้นวันนี้ กัน key ขยะในอนาคต
           : await FQ.fetchRange(firebaseDb, vehicleId, todayKey, todayKey);
         return this.parseVehicleSnapshot(snap, afterKey);
       } catch (err) {
@@ -1653,7 +1653,15 @@ ${this.healthState.action}`,
         this.refreshHealthState();
       };
 
-      liveDetachers[vehicleId] = FQ.listenAfter(firebaseDb, vehicleId, startKey, callback, errorHandler);
+      // จำกัดถึงสิ้นวันนี้ (หลังเที่ยงคืน checkDayChanged จะ subscribe ใหม่ของวันใหม่ให้เอง)
+      liveDetachers[vehicleId] = FQ.listenAfter(
+        firebaseDb,
+        vehicleId,
+        startKey,
+        callback,
+        errorHandler,
+        localDateKey(new Date()),
+      );
     },
 
     // ✅ ใหม่: Periodic Sync ดึงเฉพาะข้อมูลใหม่หลัง lastKey
@@ -1703,7 +1711,9 @@ ${this.healthState.action}`,
             // ✅ ดึงเฉพาะข้อมูลใหม่หลัง lastKey เท่านั้น (ถ้ายังไม่มี เริ่มที่ต้นวันนี้)
             const cursorKey = vehicleLastKey[vehicleId] || getTodayKeyRange().startKey;
             try {
-              const snap = await FQ.fetchAfter(firebaseDb, vehicleId, cursorKey);
+              // จำกัดถึงสิ้นวันนี้: ถ้าไม่จำกัด key ขยะที่นาฬิกาเครื่องผิด (เช่น "2072-...", "no-fix-...")
+              // จะถูกดาวน์โหลดซ้ำทุกรอบ เพราะเรียงอยู่หลัง cursor เสมอและไม่เคยถูกนับเป็นจุดของวันนี้
+              const snap = await FQ.fetchAfter(firebaseDb, vehicleId, cursorKey, localDateKey(new Date()));
               if (session !== liveSessionId) return;
 
               const raw = [];

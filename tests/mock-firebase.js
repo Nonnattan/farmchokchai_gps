@@ -6,7 +6,16 @@
   "use strict";
 
   const cfg = Object.assign(
-    { vehicles: 5, days: 60, intervalSec: 30, latencyMs: 20, withMappings: true, shallowFail: false },
+    {
+      vehicles: 5,
+      days: 60,
+      intervalSec: 30,
+      latencyMs: 20,
+      withMappings: true,
+      shallowFail: false,
+      // key ขยะแบบที่พบในฐานจริง (นาฬิกาเครื่องผิด / ยังไม่ fix GPS) ซึ่งเรียงอยู่หลังวันนี้เสมอ
+      garbageKeys: ["2072-50-02T11:52:57+07:00", "no-fix-61"],
+    },
     window.__MOCK_CFG || {},
   );
 
@@ -28,7 +37,9 @@
   const extras = Object.create(null); // vid -> [{key, value}] (เรียงตาม key)
   VIDS.forEach((id) => {
     deleted[id] = new Set();
-    extras[id] = [];
+    extras[id] = (cfg.garbageKeys || [])
+      .map((key) => ({ key, value: { vehicle_id: id, lat: 13.7, lng: 100.5, speed_kmh: -1, accuracy: 5, timestampiso: key } }))
+      .sort((a, b) => (a.key < b.key ? -1 : 1));
   });
 
   const stats = {

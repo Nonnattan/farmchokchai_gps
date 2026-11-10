@@ -178,12 +178,15 @@
   /**
    * ฟัง child_added ของรถ 1 คัน เริ่มที่ startKey เสมอ (ไม่ replay ประวัติทั้งหมด)
    * callback จะไม่ถูกเรียกสำหรับ key === startKey (กันจุดซ้ำของ startAt แบบ inclusive)
+   * ถ้าระบุ toKey จะจำกัดปลายช่วงด้วย endAt(toKey + "")
+   * (กัน key ขยะจากเครื่องที่นาฬิกาผิด เช่น "2072-50-02T..." หรือ "no-fix-61" ซึ่งเรียงอยู่หลังวันนี้เสมอ)
    * @returns {function} detach
    */
-  function listenAfter(db, vehicleId, startKey, callback, errorCallback) {
+  function listenAfter(db, vehicleId, startKey, callback, errorCallback, toKey) {
     const start = String(startKey || "");
     if (!start) throw new Error("listenAfter ต้องมี startKey เสมอ");
-    const query = vehicleRef(db, vehicleId).orderByKey().startAt(start);
+    let query = vehicleRef(db, vehicleId).orderByKey().startAt(start);
+    if (toKey) query = query.endAt(String(toKey) + KEY_END);
     const handler = (snapshot) => {
       if (snapshot.key === start) return;
       callback(snapshot);

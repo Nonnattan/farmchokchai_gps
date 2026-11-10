@@ -16,38 +16,62 @@ const CONFIRM_RANGE_DAYS = 7; // ช่วงเกิน 7 วัน ต้อ�
 const CONFIRM_ESTIMATED_POINTS = 20000; // คาดว่าเกิน 20,000 จุด ต้องยืนยันก่อนโหลด
 // จำนวนจุดโดยประมาณต่อคันต่อวัน (ใช้ประเมินก่อนโหลดเท่านั้น) ปรับได้ด้วย window.FCGPS_POINTS_PER_DAY
 const ESTIMATED_POINTS_PER_VEHICLE_PER_DAY = Number(window.FCGPS_POINTS_PER_DAY) > 0 ? Number(window.FCGPS_POINTS_PER_DAY) : 2880;
-const OPEN_RANGE_CACHE_TTL_MS = 60000; // ช่วงที่รวมวันนี้ ใช้ cache ได้ไม่เกิน 60 วิ
-const TRACK_CACHE_MAX_ENTRIES = 24;
+const RECENT_DAY_TTL_MS = 60000; // วันที่เพิ่งปิด (ยังไม่ครบเวลาเผื่อ) ใช้ข้อมูลในหน่วยความจำได้ไม่เกิน 60 วิ
 const MAX_MARKERS_PER_TRACK = 5000; // เกินนี้ลดจำนวน marker (polyline ยังใช้จุดครบ)
-// key = vehicleId|from|to -> { points, fetchedAt, open }
-const trackCache = new Map();
+// cache รายคัน-รายวัน (วันที่ปิดแล้วเก็บลง IndexedDB ดู history-day-cache.js)
+const DayCache = window.HistoryDayCache;
 let loadSeq = 0; // เลขลำดับ request กันผลเก่าทับผลใหม่
 let rangeDebounceTimer = null;
 
-function trackCacheKey(vehicleId, from, to) {
-  return `${vehicleId}|${from}|${to}`;
-}
-
-function rememberTrack(key, entry) {
-  trackCache.delete(key);
-  trackCache.set(key, entry);
-  while (trackCache.size > TRACK_CACHE_MAX_ENTRIES) {
-    trackCache.delete(trackCache.keys().next().value);
+// รายชื่อวันที่ (YYYY-MM-DD) ตั้งแต่ from ถึง to
+function listDays(from, to) {
+  const out = [];
+  const d = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  if (Number.isNaN(d.getTime()) || Number.isNaN(end.getTime())) return out;
+  while (d <= end && out.length < 3660) {
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+    d.setDate(d.getDate() + 1);
   }
+  return out;
 }
 
-function getCachedTrack(key) {
-  const entry = trackCache.get(key);
-  if (!entry) return null;
-  if (entry.open && Date.now() - entry.fetchedAt > OPEN_RANGE_CACHE_TTL_MS) return null;
-  return entry;
+// แปลงจุดจาก Firebase เป็นแถวแบบย่อสำหรับเก็บ cache: [key, lat, lng, speed, accuracy, timestampiso|null]
+// (ตรรกะการอ่านค่าเดิมของ parseSnapshot: ข้ามจุดที่ไม่มีพิกัดหรือเวลาอ่านไม่ได้)
+function rowFromChild(child) {
+  const value = child.val() || {};
+  const lat = Number(value.lat);
+  const lng = Number(value.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const timestampiso = String(value.timestampiso || child.key || "");
+  if (!toDateSafe(timestampiso)) return null;
+
+  const speed = Number.isFinite(Number(value.speed_kmh))
+    ? Number(value.speed_kmh)
+    : Number.isFinite(Number(value.speed))
+      ? Number(value.speed)
+      : null;
+  const accuracy = Number.isFinite(Number(value.accuracy)) ? Number(value.accuracy) : null;
+  return [child.key, lat, lng, speed, accuracy, timestampiso === child.key ? null : timestampiso];
 }
 
-function daysInRange(from, to) {
-  const a = new Date(`${from}T00:00:00`);
-  const b = new Date(`${to}T00:00:00`);
-  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 1;
-  return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000) + 1);
+function pointFromRow(row) {
+  const timestampiso = row[5] || row[0];
+  return {
+    key: row[0],
+    lat: row[1],
+    lng: row[2],
+    speed: row[3],
+    accuracy: row[4],
+    timestampiso,
+    date: toDateSafe(timestampiso),
+    raw: null, // ไม่เก็บ raw ของ Firebase (ไม่มีที่ใช้)
+    pointNo: 0,
+    segmentMeters: null,
+    cumulativeMeters: null,
+    cumulativeKm: null,
+  };
 }
 
 // pointNo / ระยะจุดนี้ / ระยะสะสมรายวัน (ตรรกะเดิมของ parseSnapshot)
@@ -820,41 +844,9 @@ createApp({
       return sum / 1000;
     },
 
-    parseSnapshot(snapshot) {
-      const items = [];
-
-      snapshot.forEach((child) => {
-        const value = child.val() || {};
-        const lat = Number(value.lat);
-        const lng = Number(value.lng);
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-
-        const timestampiso = String(value.timestampiso || child.key || "");
-        const date = toDateSafe(timestampiso);
-        if (!date) return;
-
-        items.push({
-          key: child.key,
-          lat,
-          lng,
-          speed: Number.isFinite(Number(value.speed_kmh))
-            ? Number(value.speed_kmh)
-            : Number.isFinite(Number(value.speed))
-              ? Number(value.speed)
-              : null,
-          accuracy: Number.isFinite(Number(value.accuracy))
-            ? Number(value.accuracy)
-            : null,
-          timestampiso,
-          date,
-          raw: null, // ไม่เก็บ raw ของ Firebase (ไม่มีที่ใช้)
-          pointNo: 0,
-          segmentMeters: null,
-          cumulativeMeters: null,
-          cumulativeKm: null,
-        });
-      });
+    // แถวจาก cache รายวัน → จุดที่หน้าใช้ (เรียงเวลา + เลขจุด/ระยะสะสมรายวัน แบบเดิม)
+    pointsFromRows(rows) {
+      const items = rows.map(pointFromRow);
 
       items.sort((a, b) => {
         const ta = a.date ? a.date.getTime() : 0;
@@ -918,20 +910,22 @@ createApp({
 
       const from = this.fromDate;
       const to = this.toDate;
-      const open = to >= todayISODate();
+      const today = todayISODate();
+      const days = listDays(from, to);
+      const vehicleIds = Array.from(new Set(configs.map((cfg) => cfg.vehicleId)));
 
-      // ช่วงยาว / จุดเยอะ → ยืนยันก่อน (นับเฉพาะคันที่ต้องดึงจริง)
-      const needFetch = new Set(
-        configs
-          .filter((cfg) => force || !getCachedTrack(trackCacheKey(cfg.vehicleId, from, to)))
-          .map((cfg) => cfg.vehicleId),
-      );
-      if (needFetch.size) {
-        const days = daysInRange(from, to);
-        const estimated = days * needFetch.size * ESTIMATED_POINTS_PER_VEHICLE_PER_DAY;
-        if (days > CONFIRM_RANGE_DAYS || estimated > CONFIRM_ESTIMATED_POINTS) {
+      // วางแผนรายคัน: วันไหนมี cache แล้ว / วันนี้ดึงต่อจาก lastKey / วันไหนต้องดึงจาก Firebase
+      const plans = await Promise.all(vehicleIds.map((id) => this.planVehicleDays(id, days, today, force)));
+
+      // ช่วงยาว / จุดเยอะ → ยืนยันก่อน (นับเฉพาะวันที่ต้องดึงจริง วันที่อยู่ใน cache ไม่นับ)
+      const fetchVehicleCount = plans.filter((p) => p.fetchDays.length).length;
+      const fetchDayTotal = plans.reduce((sum, p) => sum + p.fetchDays.length, 0);
+      const fetchDayMax = plans.reduce((max, p) => Math.max(max, p.fetchDays.length), 0);
+      if (fetchDayTotal) {
+        const estimated = fetchDayTotal * ESTIMATED_POINTS_PER_VEHICLE_PER_DAY;
+        if (fetchDayMax > CONFIRM_RANGE_DAYS || estimated > CONFIRM_ESTIMATED_POINTS) {
           const confirmed = window.confirm(
-            `ช่วงที่เลือก ${days} วัน (${needFetch.size} คัน) คาดว่าประมาณ ${estimated.toLocaleString()} จุด\n` +
+            `ช่วงที่เลือก ${days.length} วัน ต้องดึงใหม่ ${fetchDayMax} วัน (${fetchVehicleCount} คัน) คาดว่าประมาณ ${estimated.toLocaleString()} จุด\n` +
               "อาจโหลดนานและใช้ปริมาณดาวน์โหลด Firebase มาก ต้องการโหลดต่อหรือไม่?",
           );
           if (!confirmed) {
@@ -948,37 +942,20 @@ createApp({
       this.setStatus("กำลังดึงข้อมูล...", "info");
 
       try {
-        // รถคันเดียวกันที่ถูกเลือกซ้ำหลายช่อง ดึงครั้งเดียว
-        const inflight = new Map();
-        const fetchVehicle = (vehicleId) => {
-          const key = trackCacheKey(vehicleId, from, to);
-          if (!force) {
-            const cached = getCachedTrack(key);
-            if (cached) return Promise.resolve(cached);
-          }
-          if (!inflight.has(key)) {
-            inflight.set(
-              key,
-              FQ.fetchRange(firebaseDb, vehicleId, from, to).then((snapshot) => {
-                const entry = { points: markRaw(this.parseSnapshot(snapshot)), fetchedAt: Date.now(), open };
-                rememberTrack(key, entry);
-                return entry;
-              }),
-            );
-          }
-          return inflight.get(key);
-        };
-
-        const results = await Promise.all(
-          configs.map(async (cfg) => {
-            const entry = await fetchVehicle(cfg.vehicleId);
-            return { slot: cfg.slot, points: entry.points, fetchedAt: entry.fetchedAt };
+        // รถคันเดียวกันที่ถูกเลือกซ้ำหลายช่อง ดึงครั้งเดียว (plan ทำรายคันอยู่แล้ว)
+        const results = new Map();
+        await Promise.all(
+          plans.map(async (plan) => {
+            results.set(plan.vehicleId, await this.executeVehiclePlan(plan, days, today));
           }),
         );
 
         if (seq !== loadSeq) return; // มี request ใหม่กว่าแล้ว ทิ้งผลนี้
 
-        results.forEach((r) => this.setTrackData(r.slot, r.points, r.fetchedAt));
+        configs.forEach((cfg) => {
+          const r = results.get(cfg.vehicleId);
+          this.setTrackData(cfg.slot, r.points, r.savedAt);
+        });
         this.renderRoute();
       } catch (err) {
         console.error(err);
@@ -987,6 +964,101 @@ createApp({
       } finally {
         if (seq === loadSeq) this.loading = false;
       }
+    },
+
+    // วางแผนการดึงของรถ 1 คัน
+    // - วันในอนาคต: ไม่มีข้อมูล ไม่ต้องดึง
+    // - วันที่ปิดแล้วและมี cache (ในเครื่อง/IndexedDB): ใช้ cache = ไม่ดาวน์โหลด
+    // - วันนี้ที่เคยดึงแล้ว: ดึงต่อเฉพาะจุดหลัง lastKey
+    // - นอกนั้น (หรือกดปุ่มโหลด = force): ดึงจาก Firebase
+    async planVehicleDays(vehicleId, days, today, force) {
+      const plan = { vehicleId, cached: new Map(), todayEntry: null, fetchDays: [] };
+      for (const day of days) {
+        if (day > today) continue;
+        if (force) {
+          plan.fetchDays.push(day);
+          continue;
+        }
+        const entry = await DayCache.get(vehicleId, day);
+        if (entry && (entry.final || (day !== today && Date.now() - entry.savedAt < RECENT_DAY_TTL_MS))) {
+          plan.cached.set(day, entry);
+        } else if (entry && day === today) {
+          plan.todayEntry = entry;
+        } else {
+          plan.fetchDays.push(day);
+        }
+      }
+      return plan;
+    },
+
+    // ทำตามแผน: วันที่ต้องดึงซึ่งติดกัน รวมเป็น query เดียว แล้วแยกเก็บ cache รายวัน
+    async executeVehiclePlan(plan, days, today) {
+      const vehicleId = plan.vehicleId;
+      const rowsByDay = new Map();
+      let savedAt = 0;
+      plan.cached.forEach((entry, day) => {
+        rowsByDay.set(day, entry.rows);
+        savedAt = Math.max(savedAt, entry.savedAt || 0);
+      });
+
+      const fetchSet = new Set(plan.fetchDays);
+      const runs = [];
+      days.forEach((day) => {
+        if (!fetchSet.has(day)) return;
+        const last = runs[runs.length - 1];
+        if (last && listDays(last[last.length - 1], day).length === 2) last.push(day);
+        else runs.push([day]);
+      });
+
+      const jobs = runs.map(async (run) => {
+        const snapshot = await FQ.fetchRange(firebaseDb, vehicleId, run[0], run[run.length - 1]);
+        const now = Date.now();
+        const grouped = new Map(run.map((day) => [day, []]));
+        snapshot.forEach((child) => {
+          const bucket = grouped.get(String(child.key).slice(0, 10));
+          if (!bucket) return;
+          const row = rowFromChild(child);
+          if (row) bucket.push(row);
+        });
+        for (const [day, rows] of grouped) {
+          await DayCache.put(vehicleId, day, rows, now);
+          rowsByDay.set(day, rows);
+        }
+        savedAt = Math.max(savedAt, now);
+      });
+
+      if (plan.todayEntry) {
+        jobs.push(
+          (async () => {
+            const entry = plan.todayEntry;
+            const cursor = entry.lastKey;
+            const snapshot = cursor
+              ? await FQ.fetchAfter(firebaseDb, vehicleId, cursor, today)
+              : await FQ.fetchRange(firebaseDb, vehicleId, today, today);
+            const now = Date.now();
+            const fresh = [];
+            snapshot.forEach((child) => {
+              if (cursor && !(child.key > cursor)) return; // startAt เป็น inclusive: ข้าม cursor
+              if (String(child.key).slice(0, 10) !== today) return;
+              const row = rowFromChild(child);
+              if (row) fresh.push(row);
+            });
+            const rows = cursor ? entry.rows.concat(fresh) : fresh;
+            await DayCache.put(vehicleId, today, rows, now);
+            rowsByDay.set(today, rows);
+            savedAt = Math.max(savedAt, now);
+          })(),
+        );
+      }
+
+      await Promise.all(jobs);
+
+      const rows = [];
+      days.forEach((day) => {
+        const dayRows = rowsByDay.get(day);
+        if (dayRows) for (const r of dayRows) rows.push(r);
+      });
+      return { points: markRaw(this.pointsFromRows(rows)), savedAt: savedAt || Date.now() };
     },
 
     // ลบจุดออกจาก state ในเครื่อง (ไม่ต้องโหลดใหม่ทั้งหมด) แล้วคำนวณเลขจุด/ระยะใหม่
@@ -1004,12 +1076,8 @@ createApp({
         this.tracks[slot].points = updatedBySource.get(current);
       });
 
-      trackCache.forEach((entry, cacheKey) => {
-        if (!cacheKey.startsWith(`${vehicleId}|`)) return;
-        if (!entry.points.some((p) => p.key === key)) return;
-        const updated = updatedBySource.get(entry.points) || renumber(entry.points);
-        trackCache.set(cacheKey, { ...entry, points: updated });
-      });
+      // เอาออกจาก cache รายวันด้วย (รวม IndexedDB) เปิดหน้าใหม่จุดที่ลบจะไม่กลับมา
+      return DayCache.removeKey(vehicleId, String(key).slice(0, 10), key);
     },
 
     renderRoute() {
@@ -1217,7 +1285,7 @@ createApp({
         await firebaseDb.ref(`locations/${row.vehicleId}/${row.key}`).remove();
         this.setStatus("ลบจุดเรียบร้อยแล้ว", "ok");
         // เอาจุดออกจาก state ในเครื่อง แล้ววาดใหม่ (ไม่ดึงข้อมูลทั้งช่วงซ้ำ)
-        this.removePointLocally(row.vehicleId, row.key);
+        await this.removePointLocally(row.vehicleId, row.key);
         this.renderRoute();
       } catch (err) {
         console.error(err);

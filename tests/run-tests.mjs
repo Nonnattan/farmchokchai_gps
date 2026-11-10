@@ -434,7 +434,7 @@ if (want("history")) {
   const rows = await page.evaluate(() => document.querySelectorAll(".table-card tbody tr").length);
   check("history: ตารางแสดง 200 แถว", rows === 200, `rows=${rows}`);
 
-  // เปลี่ยนวัน → ดึงเฉพาะช่วงใหม่ (2 วัน × 4 คัน > 20,000 → ต้อง confirm)
+  // เปลี่ยนวัน → ดึงแค่วันที่ยังไม่มีใน cache (เมื่อวาน) + จุดใหม่ของวันนี้ต่อจาก lastKey
   let base = s.locationRecords;
   await page.evaluate(`(${VM}).fromDate = '${yesterday}'`);
   await page.waitForTimeout(150);
@@ -443,18 +443,30 @@ if (want("history")) {
   await page.waitForTimeout(600);
   s = await stats(page);
   const total2d = await todayTotal(page, VIDS4, yesterday, today);
-  check("history เปลี่ยนวัน: confirm เมื่อคาดว่าเกิน 20,000 จุด", dialogs.some((m) => m.includes("2 วัน")), dialogs.slice(-1)[0] || "");
-  check("history เปลี่ยนวัน: ดึงเฉพาะช่วง [from,to]", s.locationRecords - base === total2d, `records=${s.locationRecords - base} expected=${total2d}`);
+  const yTotal4 = await todayTotal(page, VIDS4, yesterday, yesterday);
+  check(
+    "history เปลี่ยนวัน: ดึงแค่วันที่ยังไม่มี (เมื่อวาน) + จุดใหม่ของวันนี้",
+    s.locationRecords - base >= yTotal4 && s.locationRecords - base <= yTotal4 + 4 * 3,
+    `records=${s.locationRecords - base} เมื่อวาน=${yTotal4} (ถ้าดึงทั้งช่วงใหม่ = ${total2d})`,
+  );
   const shown = await page.evaluate(`(${VM}).visibleAllFilteredPoints.length`);
   check("history เปลี่ยนวัน: แสดงจุดครบช่วง", shown === total2d, `shown=${shown}`);
 
-  // กลับไปวันนี้ → ใช้ cache (ภายใน 60 วิ)
+  // ลบจุดของเมื่อวาน (ใช้ตรวจว่า cache ใน IndexedDB ถูกอัปเดตด้วย ตอนเปิดหน้าใหม่ด้านล่าง)
+  const delY = await page.evaluate(`(async () => {
+    const vm = ${VM};
+    const row = vm.visibleAllFilteredPoints.find((p) => p.key.startsWith('${yesterday}T12'));
+    await vm.deletePoint(row);
+    return { key: row.key, vid: row.vehicleId };
+  })()`);
+
+  // กลับไปวันนี้ → ใช้ cache ดึงแค่จุดใหม่ต่อจาก lastKey
   base = (await stats(page)).locationRecords;
   await page.evaluate(`(${VM}).fromDate = '${today}'`);
   await page.waitForTimeout(700);
   await waitFor(page, vmLoaded);
   s = await stats(page);
-  check("history กลับไปช่วงเดิม: ใช้ cache ไม่ดึงซ้ำ", s.locationRecords === base, `records +${s.locationRecords - base}`);
+  check("history กลับไปช่วงเดิม: ไม่ดึงซ้ำ (เฉพาะจุดใหม่ของวันนี้)", s.locationRecords - base <= 4 * 3, `records +${s.locationRecords - base}`);
 
   // ปุ่มโหลด → bypass cache
   base = s.locationRecords;
@@ -477,6 +489,22 @@ if (want("history")) {
     "history ลบจุด: ลบใน Firebase + เอาออกจากหน้า โดยไม่โหลดใหม่",
     afterDel.deleted && !afterDel.still && afterDel.n === delInfo.n - 1 && s.locationRecords === base && afterDel.maxNo === delInfo.maxNo - 1,
     JSON.stringify({ before: delInfo.n, ...afterDel, records: s.locationRecords - base }),
+  );
+
+  // ขยายช่วงเป็น 4 วัน: ดึงแค่ 2 วันที่ยังไม่มี (2 × 4 คัน × 2,880 > 20,000 → confirm)
+  base = s.locationRecords;
+  const d3 = localDateKey(new Date(Date.now() - 3 * DAY));
+  const d2x = localDateKey(new Date(Date.now() - 2 * DAY));
+  await page.evaluate(`(${VM}).fromDate = '${d3}'`);
+  await page.waitForTimeout(700);
+  await waitFor(page, vmLoaded);
+  s = await stats(page);
+  const twoDays = await todayTotal(page, VIDS4, d3, d2x);
+  check("history ขยายช่วง: confirm เมื่อคาดว่าเกิน 20,000 จุด", dialogs.some((m) => m.includes("ต้องดึงใหม่ 2 วัน")), dialogs.slice(-1)[0] || "");
+  check(
+    "history ขยายช่วง: ดึงเฉพาะวันที่ยังไม่มีใน cache",
+    s.locationRecords - base >= twoDays && s.locationRecords - base <= twoDays + 4 * 3,
+    `records=${s.locationRecords - base} วันที่ขาด=${twoDays}`,
   );
 
   // ช่วงเกิน 7 วัน → confirm; กดยกเลิก → ไม่ดึง
@@ -516,7 +544,35 @@ if (want("history")) {
   const csvRows = csv.trim().split("\n").length - 1;
   const allRows = await page.evaluate(`(${VM}).visibleAllFilteredPoints.length`);
   check("history: export CSV ครบทุกแถว", csvRows === allRows, `csv=${csvRows} rows=${allRows}`);
-  check("history: ไม่มี console error", !errors.length, errors.slice(0, 3).join(" | "));
+
+  // เปิดหน้าใหม่ (เหมือนปิดแล้วเข้าใหม่): วันในอดีตอ่านจาก IndexedDB ไม่ดาวน์โหลดซ้ำ
+  const p2 = await ctx.newPage();
+  p2.on("dialog", (d) => d.accept());
+  const errors2 = await openPage(ctx, p2, "history.html");
+  await waitFor(p2, vmLoaded);
+  const r0 = await stats(p2);
+  await p2.evaluate(`(${VM}).fromDate = '${d3}'`);
+  await p2.waitForTimeout(700);
+  await waitFor(p2, vmLoaded);
+  const r1 = await stats(p2);
+  const reopen = await p2.evaluate(`(() => {
+    const vm = ${VM};
+    return {
+      // นับเฉพาะวันในอดีต (วันนี้มีจุดใหม่เข้าเรื่อย ๆ ระหว่างทดสอบ)
+      shownPast: vm.visibleAllFilteredPoints.filter((p) => p.key < '${today}').length,
+      deletedBack: vm.visibleAllFilteredPoints.some((p) => p.key === '${delY.key}' && p.vehicleId === '${delY.vid}'),
+    };
+  })()`);
+  // mock เป็นฐานข้อมูลแยกต่อหน้า: หน้าใหม่ยังมีจุดของเมื่อวานที่ลบไปจากหน้าแรก จึงลบ 1 ออกจากค่าคาดหวัง
+  const expectedPast = (await todayTotal(p2, VIDS4, d3, yesterday)) - 1;
+  check(
+    "history เปิดหน้าใหม่: วันในอดีตมาจาก cache ในเครื่อง (ไม่ดาวน์โหลด)",
+    r1.locationRecords - r0.locationRecords <= 4 * 3 && reopen.shownPast === expectedPast,
+    `records=${r1.locationRecords - r0.locationRecords} จุดวันในอดีตที่แสดง=${reopen.shownPast}/${expectedPast} (ถ้าไม่มี cache ต้องดึง ${expectedPast})`,
+  );
+  check("history เปิดหน้าใหม่: จุดที่ลบไปแล้วไม่กลับมาจาก cache", !reopen.deletedBack, JSON.stringify(delY));
+  const all = errors.concat(errors2);
+  check("history: ไม่มี console error", !all.length, all.slice(0, 3).join(" | "));
   await ctx.close();
 }
 
