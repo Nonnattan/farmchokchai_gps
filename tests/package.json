@@ -1,0 +1,12 @@
+{
+  "name": "farmchokchai-gps-tests",
+  "private": true,
+  "type": "module",
+  "description": "Playwright + mock Firebase tests (ใช้ Chrome ที่ติดตั้งในเครื่อง)",
+  "scripts": {
+    "test": "node run-tests.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

@@ -141,13 +141,14 @@ createApp({
       }
     },
 
-    async loadDevices() {
-      const snap = await firebaseDb.ref("locations").once("value");
-      const ids = [];
-      snap.forEach((child) => {
-        const id = String(child.key || "").trim();
-        if (id) ids.push(id);
+    // รายชื่อ device = key ลูกของ /locations ผ่าน shallow REST (ไม่ดาวน์โหลดจุด GPS)
+    async loadDevices(mappingsById, force = false) {
+      const listing = await window.FirebaseQueries.listVehicleIds(firebaseDb, {
+        mappings: mappingsById || {},
+        force,
       });
+      if (listing.shallowError) throw listing.shallowError;
+      const ids = listing.locationIds.slice();
       ids.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
       this.deviceOptions = ids;
     },
@@ -155,32 +156,38 @@ createApp({
     async loadMappings() {
       const snap = await firebaseDb.ref("vehicle_mappings").once("value");
       const items = [];
+      const byId = {};
 
       snap.forEach((child) => {
         const value = child.val() || {};
         const vehicleId = String(child.key || value.vehicle_id || "").trim();
         if (!vehicleId) return;
 
-        items.push({
+        const item = {
           vehicleId,
           plate: String(value.plate || value.license_plate || "").trim(),
           note: String(value.note || "").trim(),
           updatedAt: value.updatedAt || value.updated_at || null,
-        });
+        };
+        items.push(item);
+        byId[vehicleId] = { plate: item.plate, note: item.note, updatedAt: item.updatedAt };
       });
 
       items.sort((a, b) => a.vehicleId.localeCompare(b.vehicleId, "th", { numeric: true, sensitivity: "base" }));
       this.mappings = items;
+      return byId;
     },
 
-    async reloadAll() {
+    // force = กดปุ่มโหลดใหม่ (ข้าม cache รายชื่อรถใน sessionStorage)
+    async reloadAll(force) {
       if (!this.initFirebase()) return;
 
       this.loading = true;
       this.setStatus("กำลังโหลดข้อมูล...", "info");
 
       try {
-        await Promise.all([this.loadDevices(), this.loadMappings()]);
+        const byId = await this.loadMappings();
+        await this.loadDevices(byId, force === true);
         this.setStatus(`โหลดข้อมูลสำเร็จ ${this.mappings.length} รายการ`, "ok");
       } catch (err) {
         console.error(err);

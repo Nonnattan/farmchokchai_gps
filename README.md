@@ -70,3 +70,39 @@ locations/
 - ถ้าปัญหายังไม่หาย แถบจะกลับมาแสดงใหม่หลังครบ 10 นาที
 - ระหว่างที่ยังไม่กดปิด จะไม่สร้างแจ้งเตือนซ้ำมาทับกัน
 
+
+## การดึงข้อมูลจาก Firebase (อัปเดต: ลดการดาวน์โหลด)
+
+ทุกหน้าที่อ่าน `locations` ต้องเรียกผ่าน `firebase-queries.js` (`window.FirebaseQueries`) เท่านั้น
+และดึงเฉพาะช่วงที่ผู้ใช้ดูอยู่ — **ห้ามอ่าน `ref('locations')` ทั้งก้อน และห้าม `.on()` บน `locations/{id}` ที่ไม่มี `startAt`**
+
+| ฟังก์ชัน | ใช้ทำอะไร |
+|---|---|
+| `listVehicleIds(db, { mappings, force })` | รายชื่อรถ = `vehicle_mappings` ∪ `GET {databaseURL}/locations.json?shallow=true` (ได้แค่ชื่อ key) cache ใน sessionStorage 10 นาที |
+| `fetchRange(db, id, from, to)` | `orderByKey().startAt(from).endAt(to + "")` — from/to เป็น prefix เช่น `2026-11-10`, `2026-11`, `2026` |
+| `fetchAfter(db, id, cursor, to?)` | ดึงต่อจาก key ล่าสุด (ผู้เรียกข้าม key == cursor) |
+| `listenAfter(db, id, startKey, cb)` | `child_added` เริ่มที่ startKey เสมอ |
+
+พฤติกรรมแต่ละหน้า
+- **realtime**: โหลดจุดวันนี้ครั้งเดียว แล้วฟัง `child_added` ต่อจาก key ล่าสุด, resync ทุก 45 วิ (ข้ามเมื่อแท็บซ่อน/ออฟไลน์), render ≤ 1 ครั้ง/วิ, ตาราง 200 แถว + "แสดงเพิ่ม", เขียน cache ลง localStorage ≤ 1 ครั้ง/10 วิ
+- **history**: ดึงเฉพาะ [วันที่เริ่ม, วันที่สิ้นสุด] ของรถที่เลือก, cache ในหน่วยความจำ, ช่วง > 7 วัน หรือคาดว่า > 20,000 จุด ต้องยืนยันก่อน, ปุ่ม "โหลดข้อมูล" บังคับดึงใหม่
+- **dashboard**: ดึงเฉพาะวัน/เดือน/ปีที่เลือก, ช่วงในอดีต cache ไว้, auto refresh ทุก 60 วิ เฉพาะโหมดวันนี้และแท็บที่มองเห็น
+
+ค่าที่ปรับได้
+- `window.FCGPS_POINTS_PER_DAY` (ตั้งก่อนโหลด `history.js`) — จำนวนจุดต่อคันต่อวันที่ใช้ประเมินก่อนโหลดช่วงยาว (ค่าเริ่มต้น 2,880 = ส่งทุก 30 วิ; ถ้าส่งทุก 5 วิ ให้ใช้ 17,280)
+
+## ทดสอบ (Playwright + mock Firebase)
+
+ต้องมี Node.js และ Google Chrome / Microsoft Edge ในเครื่อง (ไม่ต่อ Firebase จริง)
+
+```bash
+cd tests
+npm install
+npm test
+```
+
+- `tests/mock-firebase.js` จำลอง compat SDK + REST shallow ด้วยข้อมูลแบบ virtual 5 คัน × 60 วัน × 2,880 จุด/วัน และนับ record ที่ส่งกลับ
+- `tests/run-tests.mjs` ตรวจ: grep query ต้องห้าม, จำนวน record ต่อหน้า, cache, debounce, ลบจุด, ตัดเน็ต/ต่อใหม่, ข้ามเที่ยงคืน, เปิดทิ้ง 10 นาที, เวลา render < 50 ms, console error
+- `tests/measure.mjs [dir]` วัด read/record ตอนเปิดแต่ละหน้า (ใช้เทียบเวอร์ชัน)
+
+รายละเอียดการเปลี่ยนแปลงและตัวเลข ก่อน/หลัง: ดู `CHANGES.md`

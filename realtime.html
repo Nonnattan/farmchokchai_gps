@@ -12,7 +12,7 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     />
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -90,7 +90,7 @@
         <button
           class="btn secondary"
           @click="fitToRoute"
-          :disabled="!visiblePoints.length"
+          :disabled="!visiblePointCount"
         >
           จัดขอบแผนที่
         </button>
@@ -328,6 +328,7 @@
               <tr
                 v-for="(p, idx) in filteredPoints"
                 :key="p.vehicleId + '-' + p.key"
+                v-memo="[p.key, p.vehicleId, p.color, p.displayLabel, p.pointNo, p.segmentMeters, p.cumulativeKm, p.lat, p.lng, p.speed, p.accuracy]"
               >
                 <td>
                   <span class="badge-pill">
@@ -361,10 +362,19 @@
             </tbody>
           </table>
         </div>
+        <div
+          v-if="filteredPointCount > filteredPoints.length"
+          class="table-more"
+          style="display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 0"
+        >
+          <span class="small-note">แสดง {{ filteredPoints.length }} จาก {{ filteredPointCount }} แถว</span>
+          <button class="btn secondary" type="button" @click="showMoreRows">แสดงเพิ่ม</button>
+        </div>
       </section>
     </div>
 
     <script src="firebase-config.js"></script>
+    <script src="firebase-queries.js"></script>
     <script src="nav.js"></script>
     <script src="realtime.js"></script>
   </body>

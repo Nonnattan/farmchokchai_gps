@@ -1,8 +1,59 @@
-const { createApp } = Vue;
+const { createApp, markRaw } = Vue;
+const FQ = window.FirebaseQueries;
 
 let firebaseDb = null;
 let firebaseInfoRef = null;
 let firebaseInfoCallback = null;
+
+// ---- การดึงข้อมูลแบบตามช่วง (ไม่อ่าน locations ทั้งก้อน) ----
+const AUTO_REFRESH_MS = 60000; // auto refresh เฉพาะโหมด "วันนี้" ทุก 60 วิ
+const FILTER_DEBOUNCE_MS = 400;
+const MAX_CACHED_PERIODS = 6;
+// periodCache: prefix ("YYYY-MM-DD" | "YYYY-MM" | "YYYY") -> { complete, vehicles: Map(vehicleId -> { rows, lastKey }) }
+// complete = ช่วงนี้ปิดไปแล้วตอนดึง (อดีต) จึงไม่ต้อง refresh อีก
+const periodCache = new Map();
+let requestSeq = 0; // เลขลำดับ request ใช้ทิ้งผลของ request เก่า
+let inFlight = false; // in-flight guard ของ auto refresh
+let filterDebounceTimer = null;
+let visibilityHandler = null;
+let lastVehicleListing = null;
+
+function isClosedPeriodPrefix(prefix) {
+  const todayKey = todayISODate();
+  return prefix < todayKey.slice(0, prefix.length);
+}
+
+function rowFromChild(child) {
+  const value = child.val() || {};
+  const lat = Number(value.lat);
+  const lng = Number(value.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  const timestampiso = String(value.timestampiso || child.key || '');
+  const date = toDateSafe(timestampiso);
+  if (!date) return null;
+
+  return { key: child.key, lat, lng, timestampiso, date };
+}
+
+function rowsFromSnapshot(snapshot, skipKey = null) {
+  const rows = [];
+  snapshot.forEach((child) => {
+    if (skipKey && child.key === skipKey) return;
+    const row = rowFromChild(child);
+    if (row) rows.push(row);
+  });
+  return rows;
+}
+
+function rememberPeriod(prefix, entry) {
+  periodCache.delete(prefix);
+  periodCache.set(prefix, entry);
+  while (periodCache.size > MAX_CACHED_PERIODS) {
+    const oldest = periodCache.keys().next().value;
+    periodCache.delete(oldest);
+  }
+}
 
 const COLORS = [
   '#38bdf8',
@@ -396,16 +447,16 @@ createApp({
 
   watch: {
     filterMode() {
-      this.refreshAll();
+      this.scheduleFilterRefresh();
     },
     filterDate() {
-      this.refreshAll();
+      this.scheduleFilterRefresh();
     },
     filterMonth() {
-      this.refreshAll();
+      this.scheduleFilterRefresh();
     },
     filterYear() {
-      this.refreshAll();
+      this.scheduleFilterRefresh();
     },
   },
 
@@ -484,61 +535,83 @@ createApp({
       return splitLabelLines(text, maxLineLength);
     },
 
-    matchesFilter(date) {
-      if (!date) return false;
-
+    // สร้างฟังก์ชันกรองครั้งเดียวต่อรอบ (ตรรกะเดิมของ matchesFilter)
+    buildFilterMatcher() {
       if (this.filterMode === 'day') {
         const selected = toDateSafe(this.filterDate);
-        return selected ? sameCalendarDay(date, selected) : false;
+        return (date) => (date && selected ? sameCalendarDay(date, selected) : false);
       }
 
       if (this.filterMode === 'month') {
         const [year, month] = String(this.filterMonth || '').split('-').map(Number);
-        return (
+        return (date) =>
+          !!date &&
           Number.isFinite(year) &&
           Number.isFinite(month) &&
           date.getFullYear() === year &&
-          date.getMonth() + 1 === month
-        );
+          date.getMonth() + 1 === month;
       }
 
       if (this.filterMode === 'year') {
         const year = Number(this.filterYear);
-        return Number.isFinite(year) && date.getFullYear() === year;
+        return (date) => !!date && Number.isFinite(year) && date.getFullYear() === year;
       }
 
-      return true;
+      return (date) => !!date;
     },
 
-    parsePoints(snapshot) {
-      const rows = [];
+    matchesFilter(date) {
+      return this.buildFilterMatcher()(date);
+    },
 
-      snapshot.forEach((child) => {
-        const value = child.val() || {};
-        const lat = Number(value.lat);
-        const lng = Number(value.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    // prefix ของ key ที่ใช้ query ตามช่วงที่เลือก (null = ค่าตัวกรองไม่ถูกต้อง)
+    periodPrefix() {
+      if (this.filterMode === 'day') {
+        const v = String(this.filterDate || '');
+        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+      }
+      if (this.filterMode === 'month') {
+        const v = String(this.filterMonth || '');
+        return /^\d{4}-\d{2}$/.test(v) ? v : null;
+      }
+      if (this.filterMode === 'year') {
+        const v = String(this.filterYear || '').trim();
+        return /^\d{4}$/.test(v) ? v : null;
+      }
+      return null;
+    },
 
-        const timestampiso = String(value.timestampiso || child.key || '');
-        const date = toDateSafe(timestampiso);
-        if (!date) return;
+    isTodaySelected() {
+      return this.filterMode === 'day' && this.filterDate === todayISODate();
+    },
 
-        rows.push({
-          key: child.key,
-          lat,
-          lng,
-          timestampiso,
-          date,
-        });
-      });
+    scheduleFilterRefresh() {
+      // ทิ้งผลของ request ที่กำลังวิ่งอยู่ทันที แล้วรอ 400 ms ค่อยดึงใหม่
+      requestSeq += 1;
+      if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+      filterDebounceTimer = setTimeout(() => {
+        filterDebounceTimer = null;
+        this.refreshAll();
+      }, FILTER_DEBOUNCE_MS);
+    },
 
+    autoRefreshTick() {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (!this.isTodaySelected()) return;
+      if (inFlight || this.loading) return;
+      this.refreshAll({ incremental: true });
+    },
+
+    parsePoints(rowsInput) {
+      const rows = (rowsInput || []).slice();
       rows.sort((a, b) => a.date.getTime() - b.date.getTime());
 
+      const matches = this.buildFilterMatcher();
       const points = [];
       let lastAccepted = null;
 
       rows.forEach((row) => {
-        if (!this.matchesFilter(row.date)) return;
+        if (!matches(row.date)) return;
 
         const suspicious = lastAccepted ? isSuspiciousJump(lastAccepted, row) : null;
         if (suspicious) return;
@@ -602,63 +675,143 @@ createApp({
       return sum / 1000;
     },
 
-    async refreshAll() {
-      this.subscribeFirebaseConnectionState();
+    // ดึงรายชื่อรถ + mapping (mapping อ่านทุกครั้งที่ refresh แบบเต็ม เพราะเล็ก; รายชื่อรถ cache 10 นาทีใน sessionStorage)
+    async loadVehicleListing(force) {
+      const mappingSnap = await firebaseDb.ref('vehicle_mappings').once('value');
+      const mappings = FQ.parseMappingsSnapshot(mappingSnap);
+      const listing = await FQ.listVehicleIds(firebaseDb, { mappings, force });
+      lastVehicleListing = listing;
+      return listing;
+    },
+
+    vehicleIdsFromListing(listing) {
+      if (!listing) return [];
+      // เดิมหน้า dashboard วนเฉพาะรถที่มี node ใน locations; ถ้าอ่าน shallow ไม่ได้ ใช้รายชื่อจาก mapping แทน
+      return listing.shallowError ? listing.mappingIds : listing.locationIds;
+    },
+
+    // ดึงข้อมูลของช่วง prefix ให้ครบทุกคัน: ใช้ cache ถ้าช่วงปิดแล้ว / ดึงต่อจาก lastKey ถ้าช่วงยังเปิด
+    async loadPeriod(prefix, vehicleIds, { force = false } = {}) {
+      const closedAtStart = isClosedPeriodPrefix(prefix);
+      let entry = periodCache.get(prefix);
+      if (!entry || force) {
+        entry = { prefix, complete: false, vehicles: new Map() };
+      }
+
+      await Promise.all(
+        vehicleIds.map(async (vehicleId) => {
+          const existing = entry.vehicles.get(vehicleId);
+
+          if (existing && entry.complete) return; // ช่วงในอดีตที่ดึงครบแล้ว ไม่ต้องดึงซ้ำ
+
+          if (existing && existing.lastKey) {
+            const snap = await FQ.fetchAfter(firebaseDb, vehicleId, existing.lastKey, prefix);
+            // กรองซ้ำด้วย key > lastKey ปัจจุบัน กันกรณีมี request ของช่วงเดียวกันซ้อนกันแล้วต่อจุดซ้ำ
+            const fresh = rowsFromSnapshot(snap, existing.lastKey).filter((r) => r.key > existing.lastKey);
+            if (fresh.length) {
+              existing.rows = existing.rows.concat(fresh);
+              existing.lastKey = fresh[fresh.length - 1].key;
+            }
+            return;
+          }
+
+          const snap = await FQ.fetchRange(firebaseDb, vehicleId, prefix, prefix);
+          const rows = rowsFromSnapshot(snap);
+          entry.vehicles.set(vehicleId, {
+            rows,
+            lastKey: rows.length ? rows[rows.length - 1].key : null,
+          });
+        }),
+      );
+
+      // ข้อมูลของช่วงที่ปิดไปแล้วตั้งแต่ก่อนดึง ถือว่าครบ ไม่ต้อง refresh อีก
+      entry.complete = closedAtStart;
+      rememberPeriod(prefix, entry);
+      return entry;
+    },
+
+    applyPeriod(entry, vehicleIds) {
+      const live = {};
+      let totalPoints = 0;
+      let totalDistanceKmAll = 0;
+
+      vehicleIds.forEach((vehicleIdRaw) => {
+        const vehicleId = String(vehicleIdRaw || '').trim();
+        if (!vehicleId) return;
+        const data = entry.vehicles.get(vehicleId);
+        if (!data || !data.rows.length) return;
+
+        const points = this.parsePoints(data.rows);
+        if (!points.length) return;
+
+        const segments = this.buildSegments(points);
+        const distanceKm = this.distanceKmFromSegments(segments);
+
+        totalPoints += points.length;
+        totalDistanceKmAll += distanceKm;
+
+        live[vehicleId] = {
+          // markRaw: ไม่ให้ Vue ทำ deep reactive ทุกจุด
+          points: markRaw(points),
+          segmentCount: segments.filter((s) => s.length >= 2).length,
+          distanceKm,
+        };
+      });
+
+      this.liveByVehicle = live;
+      this.totalPointCount = totalPoints;
+      this.totalDistanceKmAll = totalDistanceKmAll;
+      this.lastUpdatedAt = new Date().toISOString();
+      return Object.keys(live).length;
+    },
+
+    // opts.force = ปุ่ม "รีเฟรช" ดึงช่วงนี้ใหม่ทั้งหมด
+    // opts.incremental = auto refresh (ใช้รายชื่อรถเดิม ดึงเฉพาะจุดหลัง lastKey)
+    async refreshAll(opts = {}) {
+      const force = !!(opts && opts.force === true);
+      const incremental = !!(opts && opts.incremental === true) && !!lastVehicleListing;
+
+      if (!incremental) this.subscribeFirebaseConnectionState();
       if (!this.initFirebase()) return;
 
+      if (filterDebounceTimer && !incremental) {
+        clearTimeout(filterDebounceTimer);
+        filterDebounceTimer = null;
+      }
+
+      requestSeq += 1;
+      const seq = requestSeq;
+      inFlight = true;
       this.loading = true;
       this.setStatus(`กำลังดึงข้อมูล dashboard (${this.selectedPeriodText})...`, 'info');
 
       try {
-        const [mappingSnap, locationsSnap] = await Promise.all([
-          firebaseDb.ref('vehicle_mappings').once('value'),
-          firebaseDb.ref('locations').once('value'),
-        ]);
+        const listing = incremental ? lastVehicleListing : await this.loadVehicleListing(force);
+        if (seq !== requestSeq) return;
 
-        const mappings = {};
-        mappingSnap.forEach((child) => {
-          const value = child.val() || {};
-          const vehicleId = String(child.key || value.vehicle_id || '').trim();
-          if (!vehicleId) return;
-          mappings[vehicleId] = {
-            plate: String(value.plate || value.license_plate || '').trim(),
-            note: String(value.note || '').trim(),
-            updatedAt: value.updatedAt || value.updated_at || null,
-          };
-        });
-        this.mappingsByVehicle = mappings;
+        if (!incremental) this.mappingsByVehicle = listing.mappings;
 
-        const live = {};
-        let totalPoints = 0;
-        let totalDistanceKmAll = 0;
+        const vehicleIds = this.vehicleIdsFromListing(listing);
+        const prefix = this.periodPrefix();
 
-        locationsSnap.forEach((vehicleNode) => {
-          const vehicleId = String(vehicleNode.key || '').trim();
-          if (!vehicleId) return;
+        let deviceCount = 0;
+        if (prefix && vehicleIds.length) {
+          const entry = await this.loadPeriod(prefix, vehicleIds, { force });
+          if (seq !== requestSeq) return; // ผู้ใช้เปลี่ยนตัวกรองระหว่างรอ: ทิ้งผลนี้
+          deviceCount = this.applyPeriod(entry, vehicleIds);
+        } else {
+          this.liveByVehicle = {};
+          this.totalPointCount = 0;
+          this.totalDistanceKmAll = 0;
+          this.lastUpdatedAt = new Date().toISOString();
+        }
 
-          const points = this.parsePoints(vehicleNode);
-          if (!points.length) return;
-
-          const segments = this.buildSegments(points);
-          const distanceKm = this.distanceKmFromSegments(segments);
-
-          totalPoints += points.length;
-          totalDistanceKmAll += distanceKm;
-
-          live[vehicleId] = {
-            points,
-            segmentCount: segments.filter((s) => s.length >= 2).length,
-            distanceKm,
-          };
-        });
-
-        this.liveByVehicle = live;
-        this.totalPointCount = totalPoints;
-        this.totalDistanceKmAll = totalDistanceKmAll;
-        this.lastUpdatedAt = new Date().toISOString();
-
-        const deviceCount = Object.keys(live).length;
-        if (deviceCount) {
+        if (listing.shallowError) {
+          this.setStatus(
+            `อ่านรายชื่อรถจาก Firebase ไม่สำเร็จ (ใช้รายชื่อจาก vehicle_mappings แทน): ${listing.shallowError.message || listing.shallowError}`,
+            'error',
+          );
+        } else if (deviceCount) {
           this.setStatus(
             `อัปเดตแล้ว: พบรถ ${deviceCount} คัน | รวมระยะ ${this.totalDistanceText}`,
             'ok',
@@ -668,10 +821,14 @@ createApp({
         }
       } catch (err) {
         console.error(err);
+        if (seq !== requestSeq) return;
         this.syncFirebaseBadge(false, 'เชื่อมต่อไม่ได้');
         this.setStatus(`โหลด dashboard ไม่สำเร็จ: ${err.message || err}`, 'error');
       } finally {
-        this.loading = false;
+        if (seq === requestSeq) {
+          this.loading = false;
+          inFlight = false;
+        }
       }
     },
   },
@@ -680,12 +837,21 @@ createApp({
     this.subscribeFirebaseConnectionState();
     await this.refreshAll();
     this.refreshTimer = setInterval(() => {
-      this.refreshAll();
-    }, 30000);
+      this.autoRefreshTick();
+    }, AUTO_REFRESH_MS);
+
+    visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') return;
+      const last = toDateSafe(this.lastUpdatedAt);
+      if (!last || Date.now() - last.getTime() >= AUTO_REFRESH_MS) this.autoRefreshTick();
+    };
+    document.addEventListener('visibilitychange', visibilityHandler);
   },
 
   beforeUnmount() {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    if (filterDebounceTimer) clearTimeout(filterDebounceTimer);
+    if (visibilityHandler) document.removeEventListener('visibilitychange', visibilityHandler);
     if (firebaseInfoRef && firebaseInfoCallback) {
       try {
         firebaseInfoRef.off('value', firebaseInfoCallback);

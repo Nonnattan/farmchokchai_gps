@@ -1,4 +1,5 @@
-const { createApp } = Vue;
+const { createApp, markRaw } = Vue;
+const FQ = window.FirebaseQueries;
 
 let firebaseDb = null;
 let mapInstance = null;
@@ -23,6 +24,53 @@ const ROUTE_CACHE_PREFIX = "farmchokchai_realtime_route_cache_v1";
 const ROUTE_CACHE_MAX_POINTS = 6000;
 // ✅ ใหม่: เก็บ lastKey ของแต่ละ vehicle ใน localStorage เพื่อ persistence
 const LAST_KEY_CACHE_PREFIX = "farmchokchai_realtime_lastkey_v1";
+
+// ---- ประสิทธิภาพ: state ที่ไม่ต้องเป็น reactive ----
+const RENDER_MIN_INTERVAL_MS = 1000; // commit + render ไม่เกิน 1 ครั้ง/วินาที
+const ROUTE_CACHE_WRITE_INTERVAL_MS = 10000; // เขียน localStorage ไม่เกิน 1 ครั้ง/10 วิ
+const PERIODIC_RESYNC_MS = 45000;
+const TABLE_PAGE_SIZE = 200;
+// เส้นทางบนแผนที่แบ่งเป็นท่อนละไม่เกินกี่จุด (ภาพเหมือนเดิม แต่ canvas วาดใหม่แค่ท่อนท้ายเมื่อมีจุดใหม่)
+const POLYLINE_CHUNK_POINTS = 250;
+// จุดของวันนี้ต่อคัน (array ไม่เปลี่ยนค่า: ทุกครั้งที่มีจุดใหม่จะได้ array ใหม่) + set ของ key กันจุดซ้ำแบบ O(1)
+let routePointCache = Object.create(null);
+let routeKeySets = Object.create(null);
+let liveDetachers = Object.create(null);
+let liveSessionId = 0; // เพิ่มทุกครั้งที่ subscribe ใหม่ ใช้ทิ้งผลของรอบเก่า
+let resyncInFlight = false;
+let renderLastAt = 0;
+let routeCacheDirty = new Set();
+let routeCacheTimer = null;
+let pageHideHandler = null;
+let liveResult = null; // ข้อมูลล่าสุดของแต่ละคันที่รอ commit เข้า vehiclesById
+// สถานะ .info/connected สำหรับข้าม resync ตอนออฟไลน์ (แยกจาก firebaseConnected ที่ใช้แสดงผลเดิม)
+let rtdbConnected = null;
+let rtdbConnectedRef = null;
+let rtdbConnectedCallback = null;
+// memo ของ segments/distance ต่อ array ของจุด (คำนวณใหม่เฉพาะคันที่มีจุดใหม่)
+const routeMetricsMemo = new WeakMap();
+
+function pointKeyOf(p) {
+  return p ? p.key || p.timestampiso : undefined;
+}
+
+// คำนวณ pointNo / ระยะสะสม ตั้งแต่ index startIdx (ตรรกะเดียวกับ normalizeRoutePoints)
+function recomputeRouteMetrics(points, startIdx = 0) {
+  for (let idx = Math.max(0, startIdx); idx < points.length; idx += 1) {
+    const p = points[idx];
+    p.pointNo = idx + 1;
+    if (idx === 0) {
+      p.segmentMeters = 0;
+      p.cumulativeMeters = 0;
+    } else {
+      const prev = points[idx - 1];
+      p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+      p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
+    }
+    p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
+  }
+  return points;
+}
 
 function syncFirebaseBadge(connected, message) {
   if (typeof window.setFirebaseNavStatus === 'function') {
@@ -258,13 +306,15 @@ createApp({
       visibleVehicles: {},
       vehicleMappings: {},
       routeCacheDateKey: localDateKey(new Date()),
-      routePointCacheByVehicle: Object.create(null),
       lastRefreshAt: null,
+      tableLimit: TABLE_PAGE_SIZE,
       mapReady: false,
       resizeHandler: null,
       renderPending: false,
       renderTimer: null,
       renderNeedsFit: false,
+      renderNeedsCommit: false,
+      dayChangePending: false,
       initialAutoFitDone: false,
       healthPulse: 0,
       healthTimer: null,
@@ -317,8 +367,7 @@ createApp({
       const entries = Object.entries(this.vehiclesById).map(([vehicleId, data]) => {
         const color = colorForId(vehicleId);
         const points = data.points || [];
-        const segments = this.buildSegments(points);
-        const distanceKm = this.distanceKmFromSegments(segments);
+        const { segments, distanceKm } = this.routeMetrics(points);
         const latest = points[points.length - 1] || null;
         const latestTime = latest?.date ? latest.date.getTime() : 0;
         const plateText = this.vehicleLabelMap[vehicleId]?.plate || "";
@@ -354,59 +403,108 @@ createApp({
     visibleVehicleSummaries() {
       return this.vehicleSummaries.filter((v) => this.visibleVehicles[v.vehicleId] !== false);
     },
-    visiblePoints() {
-      const rows = [];
-      for (const vehicle of this.visibleVehicleSummaries) {
-        vehicle.points.forEach((p) => {
-          rows.push({
-            ...p,
-            vehicleId: vehicle.vehicleId,
-            color: vehicle.color,
-            displayLabel: vehicle.displayLabel || vehicle.vehicleId,
-            plateText: vehicle.plateText || "",
-          });
-        });
-      }
-
-      rows.sort((a, b) => {
-        const ta = a.date ? a.date.getTime() : 0;
-        const tb = b.date ? b.date.getTime() : 0;
-        if (tb !== ta) return tb - ta;
-        return String(a.vehicleId || "").localeCompare(String(b.vehicleId || ""), "th");
-      });
-
-      return rows;
+    // จำนวนจุดของรถที่แสดง (เดิมคือ visiblePoints.length แต่ไม่ต้อง clone ทุกจุด)
+    visiblePointCount() {
+      let total = 0;
+      for (const vehicle of this.visibleVehicleSummaries) total += vehicle.points.length;
+      return total;
     },
-    filteredPoints() {
-      return this.visiblePoints.filter((p) => {
-        if (this.filterVehicle && p.vehicleId !== this.filterVehicle) {
-          return false;
+    // ตัวกรองของตาราง (ตรรกะเดิมของ filteredPoints)
+    tablePointMatcher() {
+      const filterVehicle = this.filterVehicle;
+      const slot = this.filterHourSlot !== "" ? Number(this.filterHourSlot) : NaN;
+      const useSlot = this.filterHourSlot !== "" && Number.isFinite(slot);
+      const startTime = this.filterStartTime;
+      const endTime = this.filterEndTime;
+
+      return (p, vehicleId) => {
+        if (filterVehicle && vehicleId !== filterVehicle) return false;
+
+        if (useSlot && p.date) {
+          if (p.date.getHours() !== slot) return false;
         }
 
-        if (this.filterHourSlot !== "" && p.date) {
-          const slot = Number(this.filterHourSlot);
-          if (Number.isFinite(slot)) {
-            if (p.date.getHours() !== slot) return false;
-          }
-        }
-
-        if (p.date && (this.filterStartTime || this.filterEndTime)) {
-          const hours = pad(p.date.getHours());
-          const mins = pad(p.date.getMinutes());
-          const timeStr = `${hours}:${mins}`;
-
-          if (this.filterStartTime && timeStr < this.filterStartTime) return false;
-          if (this.filterEndTime && timeStr > this.filterEndTime) return false;
+        if (p.date && (startTime || endTime)) {
+          const timeStr = `${pad(p.date.getHours())}:${pad(p.date.getMinutes())}`;
+          if (startTime && timeStr < startTime) return false;
+          if (endTime && timeStr > endTime) return false;
         }
 
         return true;
-      });
+      };
+    },
+    tableFiltersActive() {
+      return !!(this.filterVehicle || this.filterHourSlot !== "" || this.filterStartTime || this.filterEndTime);
+    },
+    // จำนวนแถวทั้งหมดหลังกรอง (ใช้กับปุ่ม "แสดงเพิ่ม")
+    filteredPointCount() {
+      if (!this.tableFiltersActive) return this.visiblePointCount;
+      const match = this.tablePointMatcher;
+      let count = 0;
+      for (const vehicle of this.visibleVehicleSummaries) {
+        if (this.filterVehicle && vehicle.vehicleId !== this.filterVehicle) continue;
+        const pts = vehicle.points;
+        for (let i = 0; i < pts.length; i += 1) {
+          if (match(pts[i], vehicle.vehicleId)) count += 1;
+        }
+      }
+      return count;
+    },
+    // แถวของตาราง: ล่าสุดก่อน (เรียงแบบเดิม: เวลาใหม่ก่อน, เวลาเท่ากันเรียงตาม vehicleId)
+    // แสดงแค่ tableLimit แถว (เริ่ม 200) ด้วยการ merge จากท้าย array ของแต่ละคัน ไม่ต้อง clone+sort ทุกจุด
+    filteredPoints() {
+      const limit = Math.max(0, Number(this.tableLimit) || TABLE_PAGE_SIZE);
+      const match = this.tablePointMatcher;
+      const cursors = [];
+
+      for (const vehicle of this.visibleVehicleSummaries) {
+        if (this.filterVehicle && vehicle.vehicleId !== this.filterVehicle) continue;
+        if (!vehicle.points.length) continue;
+        cursors.push({ vehicle, idx: vehicle.points.length - 1 });
+      }
+
+      const rows = [];
+      while (rows.length < limit && cursors.length) {
+        let best = -1;
+        let bestTime = 0;
+        for (let c = 0; c < cursors.length; c += 1) {
+          const cur = cursors[c];
+          const p = cur.vehicle.points[cur.idx];
+          const t = p.date ? p.date.getTime() : 0;
+          if (
+            best === -1 ||
+            t > bestTime ||
+            (t === bestTime &&
+              String(cur.vehicle.vehicleId || "").localeCompare(String(cursors[best].vehicle.vehicleId || ""), "th") < 0)
+          ) {
+            best = c;
+            bestTime = t;
+          }
+        }
+
+        const cur = cursors[best];
+        const vehicle = cur.vehicle;
+        const p = vehicle.points[cur.idx];
+        cur.idx -= 1;
+        if (cur.idx < 0) cursors.splice(best, 1);
+
+        if (!match(p, vehicle.vehicleId)) continue;
+        rows.push({
+          ...p,
+          vehicleId: vehicle.vehicleId,
+          color: vehicle.color,
+          displayLabel: vehicle.displayLabel || vehicle.vehicleId,
+          plateText: vehicle.plateText || "",
+        });
+      }
+
+      return rows;
     },
     totalVehiclesText() {
       return String(this.visibleVehicleSummaries.length);
     },
     totalPointsText() {
-      return String(this.visiblePoints.length);
+      return String(this.visiblePointCount);
     },
     lastUpdatedText() {
       const times = this.vehicleSummaries
@@ -526,7 +624,28 @@ createApp({
       };
     },
   },
+  watch: {
+    // เปลี่ยนตัวกรองตาราง → กลับไปแสดง 200 แถวแรก
+    filterVehicle() {
+      this.tableLimit = TABLE_PAGE_SIZE;
+    },
+    filterHourSlot() {
+      this.tableLimit = TABLE_PAGE_SIZE;
+    },
+  },
   methods: {
+    showMoreRows() {
+      this.tableLimit += TABLE_PAGE_SIZE;
+    },
+    routeMetrics(points) {
+      const gapMs = this.gapThresholdMs;
+      const cached = routeMetricsMemo.get(points);
+      if (cached && cached.gapMs === gapMs) return cached;
+      const segments = this.buildSegments(points);
+      const metrics = { gapMs, segments, distanceKm: this.distanceKmFromSegments(segments) };
+      routeMetricsMemo.set(points, metrics);
+      return metrics;
+    },
     // ให้ template เรียก pad() ได้
     pad(n) {
       return pad(n);
@@ -852,19 +971,21 @@ ${this.healthState.action}`,
     async loadTrackedVehicleIds() {
       if (!this.initFirebase()) return [];
 
-      const ids = Object.keys(this.vehicleMappings || {}).filter(Boolean);
+      // ลำดับเดิม: ใช้รายชื่อจาก vehicle_mappings ก่อน ถ้าว่างค่อยใช้ชื่อ node ใน locations
+      // (ตอนนี้อ่านผ่าน shallow REST = ได้แค่ชื่อ key ไม่ดาวน์โหลดจุด GPS)
+      const mappings = this.vehicleMappings || {};
+      const ids = Object.keys(mappings).filter(Boolean);
       if (ids.length) {
-        ids.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
-        return ids;
+        const listing = await FQ.listVehicleIds(firebaseDb, { mappings, skipLocations: true });
+        const mappedIds = listing.mappingIds.slice();
+        mappedIds.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
+        return mappedIds;
       }
 
       try {
-        const snap = await firebaseDb.ref("locations").once("value");
-        const fallbackIds = [];
-        snap.forEach((child) => {
-          const id = String(child.key || "").trim();
-          if (id) fallbackIds.push(id);
-        });
+        const listing = await FQ.listVehicleIds(firebaseDb, { mappings });
+        if (listing.shallowError) throw listing.shallowError;
+        const fallbackIds = listing.locationIds.slice();
 
         fallbackIds.sort((a, b) => a.localeCompare(b, "th", { numeric: true, sensitivity: "base" }));
         this.setStatus(
@@ -981,14 +1102,15 @@ ${this.healthState.action}`,
       if (!oldPoints || !newPoints) return false;
       if (oldPoints.length > newPoints.length) return false;
       if (oldPoints.length === 0) return true;
+      if (oldPoints === newPoints) return true;
 
-      for (let i = 0; i < oldPoints.length; i += 1) {
-        if ((oldPoints[i]?.key || oldPoints[i]?.timestampiso) !== (newPoints[i]?.key || newPoints[i]?.timestampiso)) {
-          return false;
-        }
-      }
-
-      return true;
+      // cache ของจุดมีแต่การ "เพิ่ม" (ไม่มีการลบ) ถ้ามีจุดแทรกกลางชุด จุดสุดท้ายของชุดเก่าจะถูกเลื่อน index
+      // จึงตรวจแค่จุดแรกและจุดสุดท้ายของชุดเก่าก็พอ (O(1) แทน O(n) ทุกครั้งที่ render)
+      const last = oldPoints.length - 1;
+      return (
+        pointKeyOf(oldPoints[0]) === pointKeyOf(newPoints[0]) &&
+        pointKeyOf(oldPoints[last]) === pointKeyOf(newPoints[last])
+      );
     },
     addPointDot(state, vehicle, point) {
       const marker = L.circleMarker([point.lat, point.lng], {
@@ -1031,7 +1153,8 @@ ${this.healthState.action}`,
         const gapMs = point.date.getTime() - state.lastPoint.date.getTime();
         if (gapMs > this.gapThresholdMs) {
           state.tailPolyline = null;
-        } else if (!state.tailPolyline) {
+        } else if (!state.tailPolyline || state.tailPolyline.getLatLngs().length >= POLYLINE_CHUNK_POINTS) {
+          // เริ่มเส้นท่อนใหม่ต่อจากจุดเดิม (ภาพเหมือนเดิม) เพื่อให้ canvas วาดใหม่เฉพาะท่อนท้าย ไม่ใช่ทั้งเส้นทางของวัน
           this.addPolylineSegment(state, vehicle, state.lastPoint, point);
         } else {
           state.tailPolyline.addLatLng([point.lat, point.lng]);
@@ -1040,7 +1163,69 @@ ${this.healthState.action}`,
 
       state.lastPoint = point;
     },
+    // วาดทั้งชุดใหม่: ผลเหมือนเรียก appendPointToState ทีละจุด แต่สร้าง polyline ทีเดียวต่อช่วง
+    // (addLatLng ทีละจุดบนเส้นที่อยู่บนแผนที่แล้วเป็น O(n²) เพราะ Leaflet project ทั้งเส้นใหม่ทุกครั้ง)
+    rebuildVehicleLayer(state, vehicle, points) {
+      let run = [];
+      const flushRun = () => {
+        if (run.length >= 2) {
+          const polyline = L.polyline(
+            run.map((p) => [p.lat, p.lng]),
+            {
+              color: vehicle.color,
+              weight: 2,
+              opacity: 0.7,
+              renderer: mapCanvasRenderer,
+              interactive: false,
+            },
+          ).addTo(state.group);
+          routeLayers.push(polyline);
+          state.tailPolyline = polyline;
+        } else {
+          state.tailPolyline = null;
+        }
+      };
+
+      points.forEach((point) => {
+        this.addPointDot(state, vehicle, point);
+        const prev = state.lastPoint;
+        if (prev && prev.date && point.date) {
+          const gapMs = point.date.getTime() - prev.date.getTime();
+          if (gapMs > this.gapThresholdMs) {
+            flushRun();
+            run = [point];
+          } else {
+            if (!run.length) run.push(prev);
+            if (run.length >= POLYLINE_CHUNK_POINTS) {
+              flushRun();
+              run = [prev];
+            }
+            run.push(point);
+          }
+        } else if (!prev) {
+          run = [point];
+        }
+        state.lastPoint = point;
+      });
+      flushRun();
+    },
     updateLatestMarker(state, vehicle, latest) {
+      // จุดล่าสุดไม่เปลี่ยน → ไม่ต้องลบ/สร้าง marker ใหม่ (ลดพื้นที่ที่ canvas ต้องวาดใหม่ เหลือเฉพาะคันที่มีจุดใหม่)
+      if (latest && state.latestMarker && state.latestMarkerColor === vehicle.color) {
+        const html = this.buildPointPopupContent(vehicle, latest);
+        if (state.latestMarkerKey === pointKeyOf(latest) && state.latestMarkerHtml === html) return;
+        state.latestMarker.setLatLng([latest.lat, latest.lng]);
+        state.latestMarker.setPopupContent(html);
+        try {
+          state.latestMarker.bringToFront();
+        } catch (err) {
+          console.warn(err);
+        }
+        state.latestMarkerKey = pointKeyOf(latest);
+        state.latestMarkerHtml = html;
+        return;
+      }
+
       if (state.latestMarker) {
         try {
           state.latestMarker.remove();
@@ -1083,6 +1268,9 @@ ${this.healthState.action}`,
       }
 
       state.latestMarker = latestMarker;
+      state.latestMarkerKey = pointKeyOf(latest);
+      state.latestMarkerHtml = latestMarker.getPopup() ? latestMarker.getPopup().getContent() : "";
+      state.latestMarkerColor = vehicle.color;
     },
     syncVehicleLayer(vehicle) {
       if (!mapInstance) this.initMap();
@@ -1093,6 +1281,9 @@ ${this.healthState.action}`,
 
       if (!state) {
         state = vehicleLayerStates[vehicleId] = this.createVehicleLayerState();
+        // เดิม group ถูกเพิ่มลงแผนที่ใน render รอบที่ 2 (ซึ่งเกิดจากการ replay child_added ทั้งประวัติ)
+        // ตอนนี้ไม่มีการ replay แล้ว จึงต้องเพิ่มลงแผนที่ตั้งแต่สร้าง ไม่งั้นรถที่ยังไม่มีจุดใหม่จะไม่ถูกวาด
+        state.group.addTo(mapInstance);
       } else if (state.group && !mapInstance.hasLayer(state.group)) {
         state.group.addTo(mapInstance);
       }
@@ -1111,16 +1302,15 @@ ${this.healthState.action}`,
         state.tailPolyline = null;
         state.latestMarker = null;
 
-        nextPoints.forEach((point) => {
-          this.appendPointToState(state, vehicle, point);
-        });
+        this.rebuildVehicleLayer(state, vehicle, nextPoints);
       } else {
         for (let i = state.points.length; i < nextPoints.length; i += 1) {
           this.appendPointToState(state, vehicle, nextPoints[i]);
         }
       }
 
-      state.points = nextPoints.slice();
+      // array ของจุดไม่ถูกแก้ไขภายหลัง (มีจุดใหม่ = array ใหม่) จึงเก็บ reference ได้ ไม่ต้อง copy
+      state.points = nextPoints;
       this.updateLatestMarker(state, vehicle, nextPoints[nextPoints.length - 1] || null);
 
       return state;
@@ -1217,7 +1407,9 @@ ${this.healthState.action}`,
       if (this.routeCacheDateKey !== todayKey) {
         // ✅ วันเปลี่ยน: ล้าง cache เก่า และ lastKey เก่า
         this.routeCacheDateKey = todayKey;
-        this.routePointCacheByVehicle = Object.create(null);
+        routePointCache = Object.create(null);
+        routeKeySets = Object.create(null);
+        routeCacheDirty = new Set();
         vehicleLastKey = Object.create(null);
         clearOldCaches(new Date());
       }
@@ -1229,19 +1421,47 @@ ${this.healthState.action}`,
     },
     setRouteCacheForVehicle(vehicleId, points) {
       this.ensureRouteCacheDate();
-      const normalized = this.normalizeRoutePoints(points);
-      this.routePointCacheByVehicle[vehicleId] = normalized.slice();
-      writeRouteCache(vehicleId, normalized, new Date());
+      const normalized = markRaw(this.normalizeRoutePoints(points));
+      routePointCache[vehicleId] = normalized;
+      routeKeySets[vehicleId] = new Set(normalized.map(pointKeyOf));
 
       // ✅ ใหม่: บันทึก lastKey ของ vehicle นี้
       if (normalized.length > 0) {
         const lastPoint = normalized[normalized.length - 1];
-        const lastKey = lastPoint.key || lastPoint.timestampiso;
-        writeLastKeyCache(vehicleId, lastKey, new Date());
-        vehicleLastKey[vehicleId] = lastKey;
+        vehicleLastKey[vehicleId] = lastPoint.key || lastPoint.timestampiso;
       }
+      this.markRouteCacheDirty(vehicleId);
 
       return normalized;
+    },
+    // เขียน localStorage แบบหน่วงเวลา (≤ 1 ครั้ง/10 วิ) + flush ตอน pagehide / แท็บถูกซ่อน
+    markRouteCacheDirty(vehicleId) {
+      routeCacheDirty.add(vehicleId);
+      if (routeCacheTimer) return;
+      routeCacheTimer = setTimeout(() => {
+        routeCacheTimer = null;
+        this.flushRouteCacheWrites();
+      }, ROUTE_CACHE_WRITE_INTERVAL_MS);
+    },
+    flushRouteCacheWrites() {
+      if (routeCacheTimer) {
+        clearTimeout(routeCacheTimer);
+        routeCacheTimer = null;
+      }
+      if (!routeCacheDirty.size) return;
+      const ids = Array.from(routeCacheDirty);
+      routeCacheDirty = new Set();
+      // วันเปลี่ยนไปแล้ว ไม่เขียนข้อมูลของเมื่อวานลง key ของวันนี้
+      if (this.routeCacheDateKey !== localDateKey(new Date())) return;
+
+      const now = new Date();
+      ids.forEach((vehicleId) => {
+        const points = routePointCache[vehicleId] || [];
+        if (!points.length) return;
+        writeRouteCache(vehicleId, points, now);
+        const lastPoint = points[points.length - 1];
+        writeLastKeyCache(vehicleId, lastPoint.key || lastPoint.timestampiso, now);
+      });
     },
     normalizeRoutePoints(points) {
       const list = Array.isArray(points) ? points : [];
@@ -1265,7 +1485,7 @@ ${this.healthState.action}`,
             accuracy: Number.isFinite(Number(point.accuracy)) ? Number(point.accuracy) : null,
             timestampiso,
             date,
-            raw: point.raw ?? null,
+            raw: null, // ไม่เก็บ raw ของ Firebase ใน cache (ไม่มีที่ใช้ และกินหน่วยความจำ)
             pointNo: 0,
             segmentMeters: 0,
             cumulativeMeters: 0,
@@ -1279,20 +1499,7 @@ ${this.healthState.action}`,
           return ta - tb;
         });
 
-      normalized.forEach((p, idx) => {
-        p.pointNo = idx + 1;
-        if (idx === 0) {
-          p.segmentMeters = 0;
-          p.cumulativeMeters = 0;
-        } else {
-          const prev = normalized[idx - 1];
-          p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
-          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
-        }
-        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
-      });
-
-      return normalized;
+      return recomputeRouteMetrics(normalized, 0);
     },
 
     // ✅ ใหม่: ดึงเฉพาะข้อมูลใหม่หลัง lastKey (incremental sync)
@@ -1300,21 +1507,13 @@ ${this.healthState.action}`,
       if (!this.initFirebase()) return [];
 
       try {
-        let query = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
-
         // ถ้ามี lastKey แล้ว ให้ดึงเฉพาะข้อมูลใหม่หลังจากนั้น
-        if (afterKey) {
-          query = query.startAt(afterKey);
-        } else {
-          // ถ้าไม่มี cache เลย ให้โหลดเฉพาะวันนี้ทั้งวันครั้งเดียว
-          const { startKey, endKey } = getTodayKeyRange();
-          query = query.startAt(startKey).endAt(endKey);
-        }
-
-        const snap = await query.once('value');
-        const points = this.parseVehicleSnapshot(snap);
-
-        return points;
+        // ถ้าไม่มี cache เลย ให้โหลดเฉพาะวันนี้ทั้งวันครั้งเดียว
+        const todayKey = localDateKey(new Date());
+        const snap = afterKey
+          ? await FQ.fetchAfter(firebaseDb, vehicleId, afterKey)
+          : await FQ.fetchRange(firebaseDb, vehicleId, todayKey, todayKey);
+        return this.parseVehicleSnapshot(snap, afterKey);
       } catch (err) {
         console.error(err);
         this.setStatus(`ดึงข้อมูลของรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`, 'warn');
@@ -1326,13 +1525,8 @@ ${this.healthState.action}`,
       if (!this.initFirebase()) return [];
 
       try {
-        const { startKey, endKey } = getTodayKeyRange();
-        const snap = await firebaseDb
-          .ref(`locations/${vehicleId}`)
-          .orderByKey()
-          .startAt(startKey)
-          .endAt(endKey)
-          .once('value');
+        const todayKey = localDateKey(new Date());
+        const snap = await FQ.fetchRange(firebaseDb, vehicleId, todayKey, todayKey);
 
         const points = this.parseVehicleSnapshot(snap);
         if (points.length) {
@@ -1345,40 +1539,13 @@ ${this.healthState.action}`,
         return [];
       }
     },
-    parseVehicleSnapshot(vehicleSnapshot) {
+    parseVehicleSnapshot(vehicleSnapshot, skipKey = null) {
       const points = [];
-      const { start, end } = getTodayBounds();
 
       vehicleSnapshot.forEach((child) => {
-        const value = child.val() || {};
-        const lat = Number(value.lat);
-        const lng = Number(value.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-
-        const timestampiso = String(value.timestampiso || child.key || "");
-        const date = toDateSafe(timestampiso);
-        if (!date) return;
-
-        if (date < start || date > end) return;
-
-        points.push({
-          key: child.key,
-          lat,
-          lng,
-          speed: Number.isFinite(Number(value.speed_kmh))
-            ? Number(value.speed_kmh)
-            : Number.isFinite(Number(value.speed))
-              ? Number(value.speed)
-              : null,
-          accuracy: Number.isFinite(Number(value.accuracy)) ? Number(value.accuracy) : null,
-          timestampiso,
-          date,
-          raw: value,
-          pointNo: 0,
-          segmentMeters: 0,
-          cumulativeMeters: 0,
-          cumulativeKm: 0,
-        });
+        if (skipKey && child.key === skipKey) return; // startAt เป็น inclusive: ข้าม cursor
+        const point = this.buildPointFromRaw(child.key, child.val() || {});
+        if (point) points.push(point);
       });
 
       points.sort((a, b) => {
@@ -1387,22 +1554,18 @@ ${this.healthState.action}`,
         return ta - tb;
       });
 
-      points.forEach((p, idx) => {
-        p.pointNo = idx + 1;
-        if (idx === 0) {
-          p.segmentMeters = 0;
-          p.cumulativeMeters = 0;
-        } else {
-          const prev = points[idx - 1];
-          p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
-          p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
-        }
-        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
-      });
-
-      return points;
+      return recomputeRouteMetrics(points, 0);
     },
     detachLiveListener() {
+      Object.keys(liveDetachers).forEach((vehicleId) => {
+        try {
+          liveDetachers[vehicleId]();
+        } catch (err) {
+          console.warn(err);
+        }
+      });
+      liveDetachers = Object.create(null);
+
       Object.entries(vehicleLiveRefs).forEach(([vehicleId, ref]) => {
         const entry = vehicleLiveCallbacks[vehicleId];
         if (!ref || !entry) return;
@@ -1428,10 +1591,37 @@ ${this.healthState.action}`,
       firebaseInfoRef = null;
       firebaseInfoCallback = null;
     },
+    // ติดตาม .info/connected ไว้ใช้ตัดสินใจข้าม resync ตอนออฟไลน์ (ไม่เปลี่ยนการแสดงผลเดิม)
+    watchRtdbConnection() {
+      if (rtdbConnectedRef || !firebaseDb) return;
+      rtdbConnectedRef = firebaseDb.ref(".info/connected");
+      rtdbConnectedCallback = (snapshot) => {
+        rtdbConnected = !!snapshot.val();
+      };
+      rtdbConnectedRef.on("value", rtdbConnectedCallback, () => {
+        rtdbConnected = null;
+      });
+    },
+    unwatchRtdbConnection() {
+      if (rtdbConnectedRef && rtdbConnectedCallback) {
+        try {
+          rtdbConnectedRef.off("value", rtdbConnectedCallback);
+        } catch (err) {
+          console.warn(err);
+        }
+      }
+      rtdbConnectedRef = null;
+      rtdbConnectedCallback = null;
+    },
+    isOffline() {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+      return rtdbConnected === false;
+    },
     startHealthMonitor() {
       this.stopHealthMonitor();
       this.healthTimer = setInterval(() => {
         this.healthPulse += 1;
+        if (this.checkDayChanged()) return;
         this.refreshHealthState(true);
       }, 30000);
     },
@@ -1441,29 +1631,62 @@ ${this.healthState.action}`,
         this.healthTimer = null;
       }
     },
+    // ข้ามเที่ยงคืน: เริ่ม subscribe ใหม่จากต้นวันใหม่ (ล้าง cache ของเมื่อวาน)
+    checkDayChanged() {
+      if (this.routeCacheDateKey === localDateKey(new Date())) return false;
+      if (!this.dayChangePending) {
+        this.dayChangePending = true;
+        Promise.resolve(this.subscribeTodayLive()).finally(() => {
+          this.dayChangePending = false;
+        });
+      }
+      return true;
+    },
     // รวมชุดข้อมูลใหม่ (จาก server หรือ live event) เข้ากับ cache เดิม โดยอ้างอิง key/timestamp
     // ห้าม replace ทั้งชุด เพื่อไม่ให้จุดที่เคยมีอยู่แล้วหายไปเวลาข้อมูลใหม่มาไม่ครบ
+    // คืน array เดิม (reference เดิม) ถ้าไม่มีจุดใหม่จริง
     mergePointsIntoCache(vehicleId, incomingPoints) {
-      const current = this.routePointCacheByVehicle[vehicleId] || [];
-      const byKey = new Map();
-      current.forEach((p) => {
-        if (p) byKey.set(p.key || p.timestampiso, p);
-      });
-      (incomingPoints || []).forEach((p) => {
-        if (p) byKey.set(p.key || p.timestampiso, p);
-      });
+      const current = routePointCache[vehicleId] || [];
+      let keys = routeKeySets[vehicleId];
+      if (!keys) {
+        keys = new Set(current.map(pointKeyOf));
+        routeKeySets[vehicleId] = keys;
+      }
 
-      const merged = this.normalizeRoutePoints(Array.from(byKey.values()));
-      this.routePointCacheByVehicle[vehicleId] = merged.slice();
-      writeRouteCache(vehicleId, merged, new Date());
+      const seen = new Set();
+      const fresh = [];
+      (incomingPoints || []).forEach((p) => {
+        if (!p) return;
+        const k = pointKeyOf(p);
+        if (keys.has(k) || seen.has(k)) return;
+        seen.add(k);
+        fresh.push(p);
+      });
+      if (!fresh.length) return current;
+
+      const freshNormalized = this.normalizeRoutePoints(fresh);
+      if (!freshNormalized.length) return current;
+
+      const lastCurrent = current[current.length - 1];
+      const lastTime = lastCurrent && lastCurrent.date ? lastCurrent.date.getTime() : -Infinity;
+      let merged;
+      if (freshNormalized[0].date.getTime() >= lastTime) {
+        // กรณีปกติ: จุดใหม่ต่อท้าย ไม่ต้อง normalize/sort ทั้งชุด
+        merged = current.concat(freshNormalized);
+        recomputeRouteMetrics(merged, current.length);
+      } else {
+        // จุดมาไม่เรียงเวลา: เรียงใหม่ทั้งชุด (ตรรกะเดิม)
+        merged = this.normalizeRoutePoints(current.concat(freshNormalized));
+      }
+
+      freshNormalized.forEach((p) => keys.add(pointKeyOf(p)));
+      merged = markRaw(merged);
+      routePointCache[vehicleId] = merged;
 
       // ✅ ใหม่: อัปเดต lastKey หลังจาก merge
-      if (merged.length > 0) {
-        const lastPoint = merged[merged.length - 1];
-        const lastKey = lastPoint.key || lastPoint.timestampiso;
-        writeLastKeyCache(vehicleId, lastKey, new Date());
-        vehicleLastKey[vehicleId] = lastKey;
-      }
+      const lastPoint = merged[merged.length - 1];
+      vehicleLastKey[vehicleId] = lastPoint.key || lastPoint.timestampiso;
+      this.markRouteCacheDirty(vehicleId);
 
       return merged;
     },
@@ -1492,7 +1715,7 @@ ${this.healthState.action}`,
         accuracy: Number.isFinite(Number(value.accuracy)) ? Number(value.accuracy) : null,
         timestampiso,
         date,
-        raw: value,
+        raw: null, // ไม่เก็บ raw ของ Firebase ใน cache
         pointNo: 0,
         segmentMeters: 0,
         cumulativeMeters: 0,
@@ -1500,52 +1723,49 @@ ${this.healthState.action}`,
       };
     },
 
-    // ✅ ใหม่: Sync ข้อมูลใหม่หลัง lastKey (incremental)
-    async syncVehicleFromServerIncremental(vehicleId, result) {
-      const lastKey = vehicleLastKey[vehicleId] || null;
-
-      // ถ้ามี lastKey แล้ว ให้ดึงเฉพาะข้อมูลใหม่ (startAt จะข้ามตัว lastKey เอง)
-      // ถ้าไม่มี lastKey เลย ให้โหลดวันนี้ทั้งวันครั้งเดียว
-      const points = await this.fetchIncrementalRouteForVehicle(vehicleId, lastKey);
-      if (!points.length) return;
-
-      const merged = this.mergePointsIntoCache(vehicleId, points);
+    setVehicleResult(result, vehicleId, merged) {
       const latest = merged[merged.length - 1] || null;
-      if (latest) vehicleLastKey[vehicleId] = latest.key;
-
       result[vehicleId] = {
-        points: merged.slice(),
+        points: merged,
         lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
       };
     },
 
+    // ✅ ใหม่: Sync ข้อมูลใหม่หลัง lastKey (incremental)
+    async syncVehicleFromServerIncremental(vehicleId, result, session = liveSessionId) {
+      const lastKey = vehicleLastKey[vehicleId] || null;
+
+      // ถ้ามี lastKey แล้ว ให้ดึงเฉพาะข้อมูลใหม่ (ข้าม key == lastKey)
+      // ถ้าไม่มี lastKey เลย ให้โหลดวันนี้ทั้งวันครั้งเดียว
+      const points = await this.fetchIncrementalRouteForVehicle(vehicleId, lastKey);
+      if (session !== liveSessionId) return;
+      if (!points.length) return;
+
+      const before = routePointCache[vehicleId];
+      const merged = this.mergePointsIntoCache(vehicleId, points);
+      if (merged === before && result[vehicleId]) return;
+      this.setVehicleResult(result, vehicleId, merged);
+    },
+
     attachChildAddedListener(vehicleId, result) {
-      const ref = firebaseDb.ref(`locations/${vehicleId}`);
+      // เริ่มฟังจาก key ล่าสุดที่ sync แล้วเสมอ (ไม่ replay ประวัติทั้งหมด) ถ้ายังไม่มีให้เริ่มที่ต้นวันนี้
+      const startKey = vehicleLastKey[vehicleId] || getTodayKeyRange().startKey;
+      const session = liveSessionId;
 
       const callback = (snapshot) => {
-        const key = snapshot.key;
-        const value = snapshot.val() || {};
-        const point = this.buildPointFromRaw(key, value);
+        if (session !== liveSessionId) return;
+        if (this.checkDayChanged()) return;
+
+        const point = this.buildPointFromRaw(snapshot.key, snapshot.val() || {});
         if (!point) return;
 
-        // ✅ ป้องกัน duplicate: ตรวจสอบว่า key นี้มีใน cache แล้วหรือไม่
-        const existing = this.routePointCacheByVehicle[vehicleId] || [];
-        if (existing.some(p => (p.key || p.timestampiso) === (point.key || point.timestampiso))) {
-          return; // ข้อมูลนี้มีแล้ว ไม่ต้องเพิ่ม
-        }
-
+        // ✅ ป้องกัน duplicate ด้วย Set ของ key (O(1))
+        const before = routePointCache[vehicleId];
         const merged = this.mergePointsIntoCache(vehicleId, [point]);
-        const latest = merged[merged.length - 1] || null;
-        if (latest) vehicleLastKey[vehicleId] = latest.key;
+        if (merged === before) return; // ข้อมูลนี้มีแล้ว ไม่ต้องเพิ่ม
 
-        result[vehicleId] = {
-          points: merged.slice(),
-          lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-        };
-
-        this.vehiclesById = { ...result };
-        this.scheduleRenderRoute();
-        this.refreshHealthState(true);
+        this.setVehicleResult(result, vehicleId, merged);
+        this.scheduleRenderRoute({ commit: true });
       };
 
       const errorHandler = (err) => {
@@ -1555,9 +1775,7 @@ ${this.healthState.action}`,
         this.refreshHealthState();
       };
 
-      ref.on("child_added", callback, errorHandler);
-      vehicleLiveRefs[vehicleId] = ref;
-      vehicleLiveCallbacks[vehicleId] = { type: "child_added", callback };
+      liveDetachers[vehicleId] = FQ.listenAfter(firebaseDb, vehicleId, startKey, callback, errorHandler);
     },
 
     // ✅ ใหม่: Periodic Sync ดึงเฉพาะข้อมูลใหม่หลัง lastKey
@@ -1566,11 +1784,13 @@ ${this.healthState.action}`,
 
       periodicSyncTimer = setInterval(() => {
         this.runPeriodicResync(trackedIds, result);
-      }, 45000);
+      }, PERIODIC_RESYNC_MS);
 
       visibilityChangeHandler = () => {
         if (document.visibilityState === "visible") {
           this.runPeriodicResync(trackedIds, result);
+        } else {
+          this.flushRouteCacheWrites();
         }
       };
       document.addEventListener("visibilitychange", visibilityChangeHandler);
@@ -1589,65 +1809,82 @@ ${this.healthState.action}`,
 
     async runPeriodicResync(trackedIds, result) {
       if (!firebaseDb) return;
+      // ข้ามเมื่อแท็บซ่อน / ออฟไลน์ / รอบก่อนยังไม่เสร็จ
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (this.isOffline()) return;
+      if (resyncInFlight) return;
+      if (this.checkDayChanged()) return;
 
-      await Promise.allSettled(
-        trackedIds.map(async (vehicleId) => {
-          const cursorKey = vehicleLastKey[vehicleId];
-          try {
-            // ✅ ใหม่: ดึงเฉพาะข้อมูลใหม่หลัง lastKey เท่านั้น
-            let query = firebaseDb.ref(`locations/${vehicleId}`).orderByKey();
-            if (cursorKey) {
-              query = query.startAt(cursorKey);
-            } else {
-              // ถ้ายังไม่เคยมี key ล่าสุด กันไว้ไม่ให้โหลดทั้งวันซ้ำ
-              query = query.limitToLast(200);
+      const session = liveSessionId;
+      let changed = false;
+      resyncInFlight = true;
+
+      try {
+        await Promise.allSettled(
+          trackedIds.map(async (vehicleId) => {
+            // ✅ ดึงเฉพาะข้อมูลใหม่หลัง lastKey เท่านั้น (ถ้ายังไม่มี เริ่มที่ต้นวันนี้)
+            const cursorKey = vehicleLastKey[vehicleId] || getTodayKeyRange().startKey;
+            try {
+              const snap = await FQ.fetchAfter(firebaseDb, vehicleId, cursorKey);
+              if (session !== liveSessionId) return;
+
+              const raw = [];
+              snap.forEach((child) => {
+                if (child.key === cursorKey) return;
+                const point = this.buildPointFromRaw(child.key, child.val() || {});
+                if (point) raw.push(point);
+              });
+              if (!raw.length) return;
+
+              const before = routePointCache[vehicleId];
+              const merged = this.mergePointsIntoCache(vehicleId, raw);
+              if (merged === before) return;
+
+              this.setVehicleResult(result, vehicleId, merged);
+              changed = true;
+            } catch (err) {
+              console.warn(`periodic resync failed for ${vehicleId}`, err);
             }
-            const snap = await query.once("value");
+          }),
+        );
+      } finally {
+        resyncInFlight = false;
+      }
 
-            const raw = [];
-            snap.forEach((child) => {
-              const point = this.buildPointFromRaw(child.key, child.val() || {});
-              if (point && point.key !== cursorKey) raw.push(point);
-            });
-            if (!raw.length) return;
-
-            const merged = this.mergePointsIntoCache(vehicleId, raw);
-            const latest = merged[merged.length - 1] || null;
-            if (latest) vehicleLastKey[vehicleId] = latest.key;
-
-            result[vehicleId] = {
-              points: merged.slice(),
-              lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-            };
-          } catch (err) {
-            console.warn(`periodic resync failed for ${vehicleId}`, err);
-          }
-        }),
-      );
-
-      this.vehiclesById = { ...result };
+      if (session !== liveSessionId) return;
       this.lastRefreshAt = new Date().toISOString();
-      this.scheduleRenderRoute();
+      // อัปเดต vehiclesById เฉพาะเมื่อมีจุดใหม่จริง
+      if (changed) this.scheduleRenderRoute({ commit: true });
       this.refreshHealthState(true);
     },
 
     async subscribeTodayLive() {
       if (!this.initFirebase()) return;
 
+      liveSessionId += 1;
+      const session = liveSessionId;
+      // ให้ cursor จาก localStorage เป็นปัจจุบันที่สุดก่อนเริ่มรอบใหม่
+      this.flushRouteCacheWrites();
+
       this.subscribeFirebaseConnectionState();
+      this.watchRtdbConnection();
       await this.loadVehicleMappings();
+      if (session !== liveSessionId) return;
 
       const trackedIds = await this.loadTrackedVehicleIds();
+      if (session !== liveSessionId) return;
 
       this.loading = true;
       this.firebaseLastError = "";
       this.setStatus("กำลังโหลดรถวิ่งล่าสุด...", "info");
       this.detachLiveListener();
       this.ensureRouteCacheDate();
-      this.routePointCacheByVehicle = Object.create(null);
+      routePointCache = Object.create(null);
+      routeKeySets = Object.create(null);
       vehicleLastKey = Object.create(null);
 
       if (!trackedIds.length) {
+        liveResult = null;
         this.vehiclesById = {};
         this.loading = false;
         this.updateNoDataState(0);
@@ -1656,36 +1893,37 @@ ${this.healthState.action}`,
       }
 
       const result = {};
+      liveResult = result;
 
       // 1) แสดงผลจาก cache (localStorage) ก่อนแบบชั่วคราว เพื่อไม่ให้หน้าจอว่างระหว่างรอ sync จริง
       trackedIds.forEach((vehicleId) => {
         const cached = this.loadRouteCacheForVehicle(vehicleId);
         if (!cached.length) return;
 
-        this.routePointCacheByVehicle[vehicleId] = cached.slice();
-        const latest = cached[cached.length - 1];
-        result[vehicleId] = {
-          points: cached.slice(),
-          lastSeenAt: latest?.date ? latest.date.toISOString() : new Date().toISOString(),
-        };
+        const points = markRaw(cached);
+        routePointCache[vehicleId] = points;
+        routeKeySets[vehicleId] = new Set(points.map(pointKeyOf));
+        this.setVehicleResult(result, vehicleId, points);
         // ✅ ใหม่: โหลด lastKey จาก localStorage
+        const latest = points[points.length - 1];
         vehicleLastKey[vehicleId] = latest?.key || null;
       });
 
       if (Object.keys(result).length) {
         this.vehiclesById = { ...result };
-        this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+        this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone, immediate: true });
         this.setStatus("แสดงข้อมูลจาก cache ชั่วคราว กำลังซิงก์กับ Firebase...", "info");
       }
 
       // 2) ✅ ใหม่: Sync ข้อมูลใหม่หลัง lastKey (incremental) แทนการโหลดทั้งวัน
       await Promise.allSettled(
-        trackedIds.map((vehicleId) => this.syncVehicleFromServerIncremental(vehicleId, result)),
+        trackedIds.map((vehicleId) => this.syncVehicleFromServerIncremental(vehicleId, result, session)),
       );
+      if (session !== liveSessionId) return;
 
       this.vehiclesById = { ...result };
       this.lastRefreshAt = new Date().toISOString();
-      this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone });
+      this.scheduleRenderRoute({ fitBounds: !this.initialAutoFitDone, immediate: true });
       this.loading = false;
 
       const countAfterInitialLoad = Object.keys(result).length;
@@ -1712,27 +1950,42 @@ ${this.healthState.action}`,
       });
       this.scheduleRenderRoute();
     },
-    scheduleRenderRoute({ fitBounds = false } = {}) {
+    // รวมการอัปเดตให้ commit vehiclesById + render แผนที่ ไม่เกิน 1 ครั้ง/วินาที
+    // opts.commit = มีจุดใหม่ใน liveResult ที่ต้อง commit เข้า vehiclesById
+    // opts.immediate = render รอบนี้ทันที (โหลดครั้งแรก/กดปุ่ม)
+    scheduleRenderRoute({ fitBounds = false, commit = false, immediate = false } = {}) {
       this.renderNeedsFit = this.renderNeedsFit || fitBounds;
+      this.renderNeedsCommit = this.renderNeedsCommit || commit;
 
       if (this.renderTimer) {
+        if (!immediate) return;
         clearTimeout(this.renderTimer);
       }
 
+      const wait = immediate ? 0 : Math.max(0, RENDER_MIN_INTERVAL_MS - (Date.now() - renderLastAt));
       this.renderPending = true;
       this.renderTimer = setTimeout(() => {
         this.renderTimer = null;
         this.renderPending = false;
+        renderLastAt = Date.now();
+        const committed = this.renderNeedsCommit && !!liveResult;
+        if (committed) {
+          this.vehiclesById = { ...liveResult };
+        }
+        this.renderNeedsCommit = false;
         const doFit = this.renderNeedsFit;
         this.renderNeedsFit = false;
         this.renderLiveMap({ fitBounds: doFit });
-      }, 80);
+        if (committed) this.refreshHealthState(true);
+      }, wait);
     },
 
     fitToRoute() {
-      if (!mapInstance || !this.visiblePoints.length) return;
-      const latlngs = this.visiblePoints.map((p) => [p.lat, p.lng]);
-      const bounds = L.latLngBounds(latlngs);
+      if (!mapInstance || !this.visiblePointCount) return;
+      const bounds = L.latLngBounds([]);
+      this.visibleVehicleSummaries.forEach((vehicle) => {
+        vehicle.points.forEach((p) => bounds.extend([p.lat, p.lng]));
+      });
       if (bounds.isValid()) mapInstance.fitBounds(bounds.pad(0.15));
     },
     focusPoint(row) {
@@ -1760,13 +2013,20 @@ ${this.healthState.action}`,
     this.initMap();
     this.resizeHandler = () => this.resizeMap();
     window.addEventListener("resize", this.resizeHandler);
+    pageHideHandler = () => this.flushRouteCacheWrites();
+    window.addEventListener("pagehide", pageHideHandler);
     this.startHealthMonitor();
     this.subscribeTodayLive();
   },
   beforeUnmount() {
+    this.flushRouteCacheWrites();
+    if (pageHideHandler) window.removeEventListener("pagehide", pageHideHandler);
+    pageHideHandler = null;
+    liveSessionId += 1;
     this.stopHealthMonitor();
     this.detachLiveListener();
     this.detachFirebaseInfoListener();
+    this.unwatchRtdbConnection();
     if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
     if (mapInstance) {
       mapInstance.remove();

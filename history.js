@@ -1,4 +1,5 @@
-const { createApp } = Vue;
+const { createApp, markRaw } = Vue;
+const FQ = window.FirebaseQueries;
 
 let firebaseDb = null;
 let firebaseInfoRef = null;
@@ -6,6 +7,71 @@ let firebaseInfoCallback = null;
 let mapInstance = null;
 let routeLayers = [];
 let pointLayers = [];
+let historyLayerGroup = null;
+
+// ---- ดึงข้อมูลตามช่วงวันที่ + cache ในหน่วยความจำ ----
+const HISTORY_TABLE_PAGE_SIZE = 200;
+const RANGE_DEBOUNCE_MS = 400;
+const CONFIRM_RANGE_DAYS = 7; // ช่วงเกิน 7 วัน ต้องยืนยันก่อนโหลด
+const CONFIRM_ESTIMATED_POINTS = 20000; // คาดว่าเกิน 20,000 จุด ต้องยืนยันก่อนโหลด
+// จำนวนจุดโดยประมาณต่อคันต่อวัน (ใช้ประเมินก่อนโหลดเท่านั้น) ปรับได้ด้วย window.FCGPS_POINTS_PER_DAY
+const ESTIMATED_POINTS_PER_VEHICLE_PER_DAY = Number(window.FCGPS_POINTS_PER_DAY) > 0 ? Number(window.FCGPS_POINTS_PER_DAY) : 2880;
+const OPEN_RANGE_CACHE_TTL_MS = 60000; // ช่วงที่รวมวันนี้ ใช้ cache ได้ไม่เกิน 60 วิ
+const TRACK_CACHE_MAX_ENTRIES = 24;
+const MAX_MARKERS_PER_TRACK = 5000; // เกินนี้ลดจำนวน marker (polyline ยังใช้จุดครบ)
+// key = vehicleId|from|to -> { points, fetchedAt, open }
+const trackCache = new Map();
+let loadSeq = 0; // เลขลำดับ request กันผลเก่าทับผลใหม่
+let rangeDebounceTimer = null;
+
+function trackCacheKey(vehicleId, from, to) {
+  return `${vehicleId}|${from}|${to}`;
+}
+
+function rememberTrack(key, entry) {
+  trackCache.delete(key);
+  trackCache.set(key, entry);
+  while (trackCache.size > TRACK_CACHE_MAX_ENTRIES) {
+    trackCache.delete(trackCache.keys().next().value);
+  }
+}
+
+function getCachedTrack(key) {
+  const entry = trackCache.get(key);
+  if (!entry) return null;
+  if (entry.open && Date.now() - entry.fetchedAt > OPEN_RANGE_CACHE_TTL_MS) return null;
+  return entry;
+}
+
+function daysInRange(from, to) {
+  const a = new Date(`${from}T00:00:00`);
+  const b = new Date(`${to}T00:00:00`);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 1;
+  return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000) + 1);
+}
+
+// pointNo / ระยะจุดนี้ / ระยะสะสมรายวัน (ตรรกะเดิมของ parseSnapshot)
+function numberHistoryPoints(items) {
+  items.forEach((p, idx) => {
+    p.pointNo = idx + 1;
+    if (idx === 0) {
+      p.segmentMeters = 0;
+      p.cumulativeMeters = 0;
+    } else {
+      const prev = items[idx - 1];
+      const isNewDay = !isSameCalendarDay(prev.date, p.date);
+      if (isNewDay) {
+        p.segmentMeters = 0;
+        p.cumulativeMeters = 0;
+      } else {
+        p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
+        p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
+      }
+    }
+    p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
+  });
+  return items;
+}
 
 function todayISODate() {
   const d = new Date();
@@ -249,6 +315,7 @@ createApp({
       status: "พร้อมใช้งาน",
       statusType: "info",
       resizeHandler: null,
+      tableLimit: HISTORY_TABLE_PAGE_SIZE,
     };
   },
 
@@ -396,6 +463,11 @@ createApp({
       return rows;
     },
 
+    // ตารางแสดงทีละ 200 แถว (export CSV ยังใช้ visibleAllFilteredPoints ครบทุกแถว)
+    pagedRows() {
+      return this.visibleAllFilteredPoints.slice(0, this.tableLimit);
+    },
+
     latestVisiblePoint() {
       return this.visibleAllFilteredPoints.length ? this.visibleAllFilteredPoints[0] : null;
     },
@@ -424,11 +496,18 @@ createApp({
   },
 
   watch: {
+    // เปลี่ยนช่วงวันที่ → debounce แล้วดึงเฉพาะช่วงใหม่ (ใช้ cache ถ้าเคยโหลดแล้ว)
     fromDate() {
-      this.renderRoute();
+      this.scheduleRangeReload();
     },
     toDate() {
-      this.renderRoute();
+      this.scheduleRangeReload();
+    },
+    filterVehicle() {
+      this.tableLimit = HISTORY_TABLE_PAGE_SIZE;
+    },
+    filterHourSlot() {
+      this.tableLimit = HISTORY_TABLE_PAGE_SIZE;
     },
     gapMinutesInput() {
       this.renderRoute();
@@ -592,20 +671,16 @@ createApp({
       this.deviceLoading = true;
 
       try {
-        const snap = await firebaseDb.ref("locations").once("value");
-        const keys = [];
-
-        snap.forEach((child) => {
-          const key = String(child.key || "").trim();
-          if (key) keys.push(key);
-        });
+        // รายชื่อ device = ชื่อ node ใน locations ผ่าน shallow REST (ไม่ดาวน์โหลดจุด GPS) cache 10 นาที
+        await this.loadVehicleMappings();
+        const listing = await FQ.listVehicleIds(firebaseDb, { mappings: this.vehicleMappings || {} });
+        if (listing.shallowError) throw listing.shallowError;
+        const keys = listing.locationIds.slice();
 
         keys.sort((a, b) =>
           a.localeCompare(b, "en", { numeric: true, sensitivity: "base" }),
         );
         this.deviceOptions = keys;
-
-        await this.loadVehicleMappings();
 
         if (!this.vehicleId1) this.vehicleId1 = keys[0] || "";
         if (!this.vehicleId2) this.vehicleId2 = keys[1] || "";
@@ -630,7 +705,7 @@ createApp({
     initMap() {
       if (mapInstance) return;
 
-      mapInstance = L.map("map", { zoomControl: true }).setView(
+      mapInstance = L.map("map", { zoomControl: true, preferCanvas: true }).setView(
         [13.736717, 100.523186],
         6,
       );
@@ -641,11 +716,14 @@ createApp({
         maxZoom: 19,
       }).addTo(mapInstance);
 
+      historyLayerGroup = L.layerGroup().addTo(mapInstance);
       setTimeout(() => mapInstance.invalidateSize(), 100);
     },
 
     resetMapLayers() {
       if (!mapInstance) return;
+
+      if (historyLayerGroup) historyLayerGroup.clearLayers();
 
       routeLayers.forEach((layer) => layer.remove());
       routeLayers = [];
@@ -774,7 +852,7 @@ createApp({
             : null,
           timestampiso,
           date,
-          raw: value,
+          raw: null, // ไม่เก็บ raw ของ Firebase (ไม่มีที่ใช้)
           pointNo: 0,
           segmentMeters: null,
           cumulativeMeters: null,
@@ -788,77 +866,154 @@ createApp({
         return ta - tb;
       });
 
-      items.forEach((p, idx) => {
-        p.pointNo = idx + 1;
-        if (idx === 0) {
-          p.segmentMeters = 0;
-          p.cumulativeMeters = 0;
-        } else {
-          const prev = items[idx - 1];
-          const isNewDay = !isSameCalendarDay(prev.date, p.date);
-          if (isNewDay) {
-            p.segmentMeters = 0;
-            p.cumulativeMeters = 0;
-          } else {
-            p.segmentMeters = haversineMeters(prev.lat, prev.lng, p.lat, p.lng);
-            p.cumulativeMeters = (prev.cumulativeMeters || 0) + (p.segmentMeters || 0);
-          }
-        }
-        p.cumulativeKm = (p.cumulativeMeters || 0) / 1000;
-      });
-
-      return items;
+      return numberHistoryPoints(items);
     },
 
-    setTrackData(slot, points) {
-      this.tracks[slot].points = points;
-      this.tracks[slot].lastUpdatedAt = new Date().toISOString();
+    setTrackData(slot, points, fetchedAt = Date.now()) {
+      // markRaw: ไม่ทำ deep reactive ทุกจุด (array ถูกแทนที่ทั้งก้อนเมื่อข้อมูลเปลี่ยน)
+      this.tracks[slot].points = markRaw(points);
+      this.tracks[slot].lastUpdatedAt = new Date(fetchedAt).toISOString();
       this.tracks[slot].status = points.length
         ? `โหลดแล้ว ${points.length} จุด`
         : "ไม่พบข้อมูล";
       this.tracks[slot].statusType = points.length ? "ok" : "warn";
     },
 
-    async loadTracks() {
+    scheduleRangeReload() {
+      this.tableLimit = HISTORY_TABLE_PAGE_SIZE;
+      loadSeq += 1; // ทิ้งผลของ request ที่กำลังวิ่งอยู่
+      if (rangeDebounceTimer) clearTimeout(rangeDebounceTimer);
+      rangeDebounceTimer = setTimeout(() => {
+        rangeDebounceTimer = null;
+        this.loadTracks();
+      }, RANGE_DEBOUNCE_MS);
+    },
+
+    // ปุ่ม "โหลดข้อมูล" = บังคับดึงใหม่ (bypass cache)
+    reloadTracks() {
+      return this.loadTracks({ force: true });
+    },
+
+    // opts.force = ข้าม cache ในหน่วยความจำ
+    async loadTracks(opts = {}) {
+      const force = !!(opts && opts.force === true);
       if (!this.initFirebase()) return;
+
+      if (rangeDebounceTimer) {
+        clearTimeout(rangeDebounceTimer);
+        rangeDebounceTimer = null;
+      }
 
       this.ensureDateDefaults();
 
       const ok = await this.ensureDeviceOptions();
       if (!ok) {
+        this.loading = false;
         this.setStatus("ยังไม่พบรายชื่อ device จาก Firebase", "warn");
         return;
       }
 
       const configs = this.vehicleConfigs.filter((cfg) => cfg.vehicleId);
       if (!configs.length) {
+        this.loading = false;
         this.setStatus("กรุณาเลือก device อย่างน้อย 1 คัน", "warn");
         return;
       }
 
+      const from = this.fromDate;
+      const to = this.toDate;
+      const open = to >= todayISODate();
+
+      // ช่วงยาว / จุดเยอะ → ยืนยันก่อน (นับเฉพาะคันที่ต้องดึงจริง)
+      const needFetch = new Set(
+        configs
+          .filter((cfg) => force || !getCachedTrack(trackCacheKey(cfg.vehicleId, from, to)))
+          .map((cfg) => cfg.vehicleId),
+      );
+      if (needFetch.size) {
+        const days = daysInRange(from, to);
+        const estimated = days * needFetch.size * ESTIMATED_POINTS_PER_VEHICLE_PER_DAY;
+        if (days > CONFIRM_RANGE_DAYS || estimated > CONFIRM_ESTIMATED_POINTS) {
+          const confirmed = window.confirm(
+            `ช่วงที่เลือก ${days} วัน (${needFetch.size} คัน) คาดว่าประมาณ ${estimated.toLocaleString()} จุด\n` +
+              "อาจโหลดนานและใช้ปริมาณดาวน์โหลด Firebase มาก ต้องการโหลดต่อหรือไม่?",
+          );
+          if (!confirmed) {
+            this.loading = false;
+            this.setStatus("ยกเลิกการโหลดข้อมูลช่วงนี้", "warn");
+            return;
+          }
+        }
+      }
+
+      loadSeq += 1;
+      const seq = loadSeq;
       this.loading = true;
       this.setStatus("กำลังดึงข้อมูล...", "info");
 
       try {
+        // รถคันเดียวกันที่ถูกเลือกซ้ำหลายช่อง ดึงครั้งเดียว
+        const inflight = new Map();
+        const fetchVehicle = (vehicleId) => {
+          const key = trackCacheKey(vehicleId, from, to);
+          if (!force) {
+            const cached = getCachedTrack(key);
+            if (cached) return Promise.resolve(cached);
+          }
+          if (!inflight.has(key)) {
+            inflight.set(
+              key,
+              FQ.fetchRange(firebaseDb, vehicleId, from, to).then((snapshot) => {
+                const entry = { points: markRaw(this.parseSnapshot(snapshot)), fetchedAt: Date.now(), open };
+                rememberTrack(key, entry);
+                return entry;
+              }),
+            );
+          }
+          return inflight.get(key);
+        };
+
         const results = await Promise.all(
           configs.map(async (cfg) => {
-            const ref = firebaseDb.ref(`locations/${cfg.vehicleId}`);
-            const snapshot = await ref.orderByKey().once("value");
-            return {
-              slot: cfg.slot,
-              points: this.parseSnapshot(snapshot),
-            };
+            const entry = await fetchVehicle(cfg.vehicleId);
+            return { slot: cfg.slot, points: entry.points, fetchedAt: entry.fetchedAt };
           }),
         );
 
-        results.forEach((r) => this.setTrackData(r.slot, r.points));
+        if (seq !== loadSeq) return; // มี request ใหม่กว่าแล้ว ทิ้งผลนี้
+
+        results.forEach((r) => this.setTrackData(r.slot, r.points, r.fetchedAt));
         this.renderRoute();
       } catch (err) {
         console.error(err);
+        if (seq !== loadSeq) return;
         this.setStatus(`โหลดข้อมูลไม่สำเร็จ: ${err.message || err}`, "error");
       } finally {
-        this.loading = false;
+        if (seq === loadSeq) this.loading = false;
       }
+    },
+
+    // ลบจุดออกจาก state ในเครื่อง (ไม่ต้องโหลดใหม่ทั้งหมด) แล้วคำนวณเลขจุด/ระยะใหม่
+    removePointLocally(vehicleId, key) {
+      const renumber = (points) =>
+        markRaw(numberHistoryPoints(points.filter((p) => p.key !== key).map((p) => ({ ...p }))));
+
+      const updatedBySource = new Map();
+      Object.keys(this.tracks).forEach((slot) => {
+        const cfg = this.vehicleConfigs.find((c) => c.slot === slot);
+        if (!cfg || cfg.vehicleId !== vehicleId) return;
+        const current = this.tracks[slot].points || [];
+        if (!current.some((p) => p.key === key)) return;
+        if (!updatedBySource.has(current)) updatedBySource.set(current, renumber(current));
+        this.tracks[slot].points = updatedBySource.get(current);
+      });
+
+      trackCache.forEach((entry, cacheKey) => {
+        if (!cacheKey.startsWith(`${vehicleId}|`)) return;
+        if (!entry.points.some((p) => p.key === key)) return;
+        const updated = updatedBySource.get(entry.points) || renumber(entry.points);
+        trackCache.set(cacheKey, { ...entry, points: updated });
+      });
     },
 
     renderRoute() {
@@ -877,39 +1032,48 @@ createApp({
       }
 
       let polyCount = 0;
+      const group = historyLayerGroup || mapInstance;
+
+      // marker บน canvas (preferCanvas) และสร้าง popup ตอนคลิกเท่านั้น
+      const addMarker = (p, style, buildPopup) => {
+        const marker = L.circleMarker([p.lat, p.lng], { ...style, interactive: true });
+        marker.on("click", () => {
+          L.popup().setLatLng(marker.getLatLng()).setContent(buildPopup()).openOn(mapInstance);
+        });
+        marker.addTo(group);
+        pointLayers.push(marker);
+        return marker;
+      };
 
       summaries.forEach((track) => {
         const pts = track.filteredPoints;
         const segments = track.segments;
         const color = track.color;
+        const title = `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong>`;
 
         if (!pts.length) return;
 
         if (pts.length === 1) {
           const p = pts[0];
-          const marker = L.circleMarker([p.lat, p.lng], {
-            radius: 9,
-            color,
-            fillColor: color,
-            fillOpacity: 1,
-            weight: 0,
-            interactive: true,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>${formatDateTime(
-                p.timestampiso,
-              )}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(
+          addMarker(
+            p,
+            { radius: 9, color, fillColor: color, fillOpacity: 1, weight: 0 },
+            () =>
+              `${title}<br>${formatDateTime(p.timestampiso)}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(
                 p.lng,
                 6,
               )}<br>Speed ${this.formatSpeed(p.speed)}<br>Acc ${this.formatAccuracy(
                 p.accuracy,
               )}<br>ระยะจุดนี้ ${p.segmentMeters != null ? p.segmentMeters.toFixed(2) : "-"} m`,
-            );
-
-          pointLayers.push(marker);
+          );
           return;
         }
+
+        // ถ้าจุดของคันนี้เกิน ~5,000 จุด แสดง marker ต้น/ปลายแต่ละช่วง + ทุก k จุด (เส้นยังใช้จุดครบ)
+        const segmentPointTotal = segments.reduce((sum, seg) => sum + seg.length, 0);
+        const markerStep =
+          segmentPointTotal > MAX_MARKERS_PER_TRACK ? Math.ceil(segmentPointTotal / MAX_MARKERS_PER_TRACK) : 1;
+        let runningIndex = 0;
 
         segments.forEach((segment, segIndex) => {
           if (!segment.length) return;
@@ -925,59 +1089,43 @@ createApp({
               lineJoin: "round",
               className: "route-polyline",
               interactive: false,
-            }).addTo(mapInstance);
+            }).addTo(group);
 
             routeLayers.push(polyline);
           }
 
           const start = segment[0];
           const end = segment[segment.length - 1];
+          const edgeStyle = { radius: 9, color, fillColor: color, fillOpacity: 1, weight: 0 };
 
-          const startMarker = L.circleMarker([start.lat, start.lng], {
-            radius: 9,
-            color,
-            fillColor: color,
-            fillOpacity: 1,
-            weight: 0,
-            interactive: true,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>เริ่มช่วง ${segIndex + 1
+          addMarker(
+            start,
+            edgeStyle,
+            () =>
+              `${title}<br>เริ่มช่วง ${segIndex + 1
               }<br>${formatDateTime(start.timestampiso)}<br>Speed ${this.formatSpeed(start.speed)}<br>Acc ${this.formatAccuracy(start.accuracy)}<br>ระยะจุดนี้ ${start.segmentMeters != null ? start.segmentMeters.toFixed(2) : "-"} m`,
-            );
+          );
 
-          const endMarker = L.circleMarker([end.lat, end.lng], {
-            radius: 9,
-            color,
-            fillColor: color,
-            fillOpacity: 1,
-            weight: 0,
-            interactive: true,
-          })
-            .addTo(mapInstance)
-            .bindPopup(
-              `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>สิ้นสุดช่วง ${segIndex + 1
+          addMarker(
+            end,
+            edgeStyle,
+            () =>
+              `${title}<br>สิ้นสุดช่วง ${segIndex + 1
               }<br>${formatDateTime(end.timestampiso)}<br>Speed ${this.formatSpeed(end.speed)}<br>Acc ${this.formatAccuracy(end.accuracy)}<br>ระยะจุดนี้ ${end.segmentMeters != null ? end.segmentMeters.toFixed(2) : "-"
               } m`,
-            );
+          );
 
-          pointLayers.push(startMarker, endMarker);
-
+          const pointStyle = { radius: 6, color, fillColor: color, fillOpacity: 0.9, weight: 0 };
           segment.forEach((p, idx) => {
+            const globalIdx = runningIndex + idx;
             if (idx === 0 || idx === segment.length - 1) return;
+            if (markerStep > 1 && globalIdx % markerStep !== 0) return;
 
-            const marker = L.circleMarker([p.lat, p.lng], {
-              radius: 6,
-              color: color,
-              fillColor: color,
-              fillOpacity: 0.9,
-              weight: 0,
-              interactive: true,
-            })
-              .addTo(mapInstance)
-              .bindPopup(
-                `<strong>${track.label} — ${track.displayLabel || track.vehicleId}</strong><br>${formatDateTime(
+            addMarker(
+              p,
+              pointStyle,
+              () =>
+                `${title}<br>${formatDateTime(
                   p.timestampiso,
                 )}<br>Lat ${formatNum(p.lat, 6)}<br>Lng ${formatNum(
                   p.lng,
@@ -985,10 +1133,10 @@ createApp({
                 )}<br>Speed ${this.formatSpeed(p.speed)}<br>Acc ${this.formatAccuracy(
                   p.accuracy,
                 )}<br>ระยะจุดนี้ ${p.segmentMeters != null ? p.segmentMeters.toFixed(2) : "-"} m`,
-              );
-
-            pointLayers.push(marker);
+            );
           });
+
+          runningIndex += segment.length;
         });
       });
 
@@ -1072,7 +1220,9 @@ createApp({
       try {
         await firebaseDb.ref(`locations/${row.vehicleId}/${row.key}`).remove();
         this.setStatus("ลบจุดเรียบร้อยแล้ว", "ok");
-        await this.loadTracks();
+        // เอาจุดออกจาก state ในเครื่อง แล้ววาดใหม่ (ไม่ดึงข้อมูลทั้งช่วงซ้ำ)
+        this.removePointLocally(row.vehicleId, row.key);
+        this.renderRoute();
       } catch (err) {
         console.error(err);
         this.setStatus(`ลบจุดไม่สำเร็จ: ${err.message || err}`, "error");
@@ -1177,6 +1327,8 @@ createApp({
   },
 
   beforeUnmount() {
+    if (rangeDebounceTimer) clearTimeout(rangeDebounceTimer);
+    loadSeq += 1;
     if (this.resizeHandler) {
       window.removeEventListener("resize", this.resizeHandler);
     }

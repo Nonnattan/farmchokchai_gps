@@ -12,7 +12,7 @@
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     />
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -89,7 +89,7 @@
                 v-model="vehicleId1"
                 class="select-input"
                 required
-                @change="loadTracks"
+                @change="loadTracks()"
               >
                 <option disabled value="">เลือก device คันที่ 1</option>
                 <option v-if="!deviceOptions.length" disabled value="">
@@ -110,7 +110,7 @@
               <select
                 v-model="vehicleId2"
                 class="select-input"
-                @change="loadTracks"
+                @change="loadTracks()"
               >
                 <option value="">ไม่เลือกคันที่ 2</option>
                 <option
@@ -128,7 +128,7 @@
               <select
                 v-model="vehicleId3"
                 class="select-input"
-                @change="loadTracks"
+                @change="loadTracks()"
               >
                 <option value="">ไม่เลือกคันที่ 3</option>
                 <option
@@ -146,7 +146,7 @@
               <select
                 v-model="vehicleId4"
                 class="select-input"
-                @change="loadTracks"
+                @change="loadTracks()"
               >
                 <option value="">ไม่เลือกคันที่ 4</option>
                 <option
@@ -205,7 +205,7 @@
           <div class="actions">
             <button
               class="btn primary"
-              @click="loadTracks"
+              @click="reloadTracks"
               :disabled="loading || deviceLoading"
             >
               {{ loading ? 'กำลังโหลด...' : (deviceLoading ? 'กำลังอ่าน device...' : 'โหลดข้อมูล') }}
@@ -391,7 +391,7 @@
               <div class="actions compact">
                 <button
                   class="btn primary"
-                  @click="loadTracks"
+                  @click="reloadTracks"
                   :disabled="loading || deviceLoading"
                 >
                   {{ loading ? 'กำลังโหลด...' : 'โหลดข้อมูล' }}
@@ -425,7 +425,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(p, idx) in visibleAllFilteredPoints" :key="p.key">
+              <tr v-for="(p, idx) in pagedRows" :key="p.slot + '-' + p.key">
                 <td>
                   <span
                     class="pill badge-pill"
@@ -473,12 +473,21 @@
             </tbody>
           </table>
         </div>
+        <div
+          v-if="visibleAllFilteredPoints.length > pagedRows.length"
+          class="table-more"
+          style="display: flex; justify-content: center; align-items: center; gap: 12px; padding: 12px 0"
+        >
+          <span class="small-note">แสดง {{ pagedRows.length }} จาก {{ visibleAllFilteredPoints.length }} แถว</span>
+          <button class="btn secondary" type="button" @click="tableLimit += 200">แสดงเพิ่ม</button>
+        </div>
       </section>
 
       <p class="status" :class="statusType">{{ status }}</p>
     </div>
 
     <script src="firebase-config.js"></script>
+    <script src="firebase-queries.js"></script>
     <script src="nav.js"></script>
     <script src="history.js"></script>
   </body>
