@@ -4,11 +4,7 @@ const FQ = window.FirebaseQueries;
 let firebaseDb = null;
 let mapInstance = null;
 let mapCanvasRenderer = null;
-let routeLayers = [];
-let pointLayers = [];
 let vehicleLayerStates = Object.create(null);
-let vehicleLiveRefs = Object.create(null);
-let vehicleLiveCallbacks = Object.create(null);
 let firebaseInfoRef = null;
 let firebaseInfoCallback = null;
 // เก็บ key ล่าสุดที่ sync แล้วของแต่ละคัน ใช้เป็น cursor ให้ child_added / periodic resync
@@ -16,9 +12,6 @@ let firebaseInfoCallback = null;
 let vehicleLastKey = Object.create(null);
 let periodicSyncTimer = null;
 let visibilityChangeHandler = null;
-
-// ✅ ใหม่: เก็บวันที่ปัจจุบันเพื่อตรวจสอบการเปลี่ยนวัน
-let currentCacheDate = localDateKey(new Date());
 
 const ROUTE_CACHE_PREFIX = "farmchokchai_realtime_route_cache_v1";
 const ROUTE_CACHE_MAX_POINTS = 6000;
@@ -185,16 +178,6 @@ function getLastKeyCacheStorageKey(vehicleId, date = new Date()) {
   return `${LAST_KEY_CACHE_PREFIX}:${localDateKey(date)}:${String(vehicleId || "").trim()}`;
 }
 
-function readLastKeyCache(vehicleId, date = new Date()) {
-  if (typeof window === "undefined" || !window.localStorage) return null;
-  try {
-    return localStorage.getItem(getLastKeyCacheStorageKey(vehicleId, date)) || null;
-  } catch (err) {
-    console.warn(err);
-    return null;
-  }
-}
-
 function writeLastKeyCache(vehicleId, lastKey, date = new Date()) {
   if (typeof window === "undefined" || !window.localStorage) return;
   try {
@@ -334,7 +317,6 @@ createApp({
       firebaseConnected: null,
       firebaseLastError: "",
       renderError: "",
-      lastSnapshotAt: null,
 
       // ตัวกรองในตาราง
       filterVehicle: "",
@@ -653,16 +635,6 @@ createApp({
     setStatus(text, type = "info") {
       this.status = text;
       this.statusType = type;
-    },
-    formatDuration(ms) {
-      if (ms == null || !Number.isFinite(ms) || ms < 0) return "-";
-      if (ms < 1000) return "น้อยกว่า 1 วิ";
-      const totalSeconds = Math.floor(ms / 1000);
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      if (minutes <= 0) return `${seconds} วินาที`;
-      if (seconds === 0) return `${minutes} นาที`;
-      return `${minutes} นาที ${seconds} วินาที`;
     },
     async enableBrowserNotification() {
       if (!this.notificationSupported) {
@@ -1000,14 +972,6 @@ ${this.healthState.action}`,
       }
     },
 
-    displayVehicleText(vehicleId) {
-      const id = String(vehicleId || "").trim();
-      if (!id) return "-";
-
-      const plate = this.vehicleMappings?.[id]?.plate || "";
-      return plate ? `${id} → ${plate}` : id;
-    },
-
     initMap() {
       if (mapInstance) return;
 
@@ -1032,26 +996,6 @@ ${this.healthState.action}`,
         this.renderError = `สร้างแผนที่ไม่สำเร็จ: ${err.message || err}`;
         this.setStatus(this.renderError, "error");
       }
-    },
-    clearAllMapLayers() {
-      if (!mapInstance) return;
-
-      Object.keys(vehicleLayerStates).forEach((vehicleId) => {
-        const state = vehicleLayerStates[vehicleId];
-        if (state?.group) {
-          try {
-            state.group.remove();
-          } catch (err) {
-            console.warn(err);
-          }
-        }
-      });
-
-      vehicleLayerStates = Object.create(null);
-      routeLayers.forEach((layer) => layer.remove());
-      routeLayers = [];
-      pointLayers.forEach((layer) => layer.remove());
-      pointLayers = [];
     },
     removeVehicleLayer(vehicleId) {
       const state = vehicleLayerStates[vehicleId];
@@ -1124,7 +1068,6 @@ ${this.healthState.action}`,
         interactive: false,
       }).addTo(state.group);
 
-      pointLayers.push(marker);
       return marker;
     },
     addPolylineSegment(state, vehicle, pointA, pointB) {
@@ -1142,7 +1085,6 @@ ${this.healthState.action}`,
         },
       ).addTo(state.group);
 
-      routeLayers.push(polyline);
       state.tailPolyline = polyline;
       return polyline;
     },
@@ -1179,7 +1121,6 @@ ${this.healthState.action}`,
               interactive: false,
             },
           ).addTo(state.group);
-          routeLayers.push(polyline);
           state.tailPolyline = polyline;
         } else {
           state.tailPolyline = null;
@@ -1385,23 +1326,6 @@ ${this.healthState.action}`,
       return sum / 1000;
     },
 
-    simplifyPointsForRender(points, maxPoints = 200) {
-      const pts = points || [];
-      if (pts.length <= maxPoints) return pts;
-
-      const first = pts[0];
-      const last = pts[pts.length - 1];
-      const innerTarget = Math.max(0, maxPoints - 2);
-      const step = Math.max(1, Math.ceil((pts.length - 2) / innerTarget));
-
-      const sampled = [first];
-      for (let i = 1; i < pts.length - 1; i += step) {
-        sampled.push(pts[i]);
-      }
-
-      if (sampled[sampled.length - 1] !== last) sampled.push(last);
-      return sampled;
-    },
     ensureRouteCacheDate() {
       const todayKey = localDateKey(new Date());
       if (this.routeCacheDateKey !== todayKey) {
@@ -1418,21 +1342,6 @@ ${this.healthState.action}`,
     loadRouteCacheForVehicle(vehicleId) {
       this.ensureRouteCacheDate();
       return readRouteCache(vehicleId, new Date());
-    },
-    setRouteCacheForVehicle(vehicleId, points) {
-      this.ensureRouteCacheDate();
-      const normalized = markRaw(this.normalizeRoutePoints(points));
-      routePointCache[vehicleId] = normalized;
-      routeKeySets[vehicleId] = new Set(normalized.map(pointKeyOf));
-
-      // ✅ ใหม่: บันทึก lastKey ของ vehicle นี้
-      if (normalized.length > 0) {
-        const lastPoint = normalized[normalized.length - 1];
-        vehicleLastKey[vehicleId] = lastPoint.key || lastPoint.timestampiso;
-      }
-      this.markRouteCacheDirty(vehicleId);
-
-      return normalized;
     },
     // เขียน localStorage แบบหน่วงเวลา (≤ 1 ครั้ง/10 วิ) + flush ตอน pagehide / แท็บถูกซ่อน
     markRouteCacheDirty(vehicleId) {
@@ -1521,24 +1430,6 @@ ${this.healthState.action}`,
       }
     },
 
-    async fetchTodayRouteForVehicle(vehicleId) {
-      if (!this.initFirebase()) return [];
-
-      try {
-        const todayKey = localDateKey(new Date());
-        const snap = await FQ.fetchRange(firebaseDb, vehicleId, todayKey, todayKey);
-
-        const points = this.parseVehicleSnapshot(snap);
-        if (points.length) {
-          this.setRouteCacheForVehicle(vehicleId, points);
-        }
-        return points;
-      } catch (err) {
-        console.error(err);
-        this.setStatus(`ดึงข้อมูลวันนี้ของรถ ${vehicleId} ไม่สำเร็จ: ${err.message || err}`, 'warn');
-        return [];
-      }
-    },
     parseVehicleSnapshot(vehicleSnapshot, skipKey = null) {
       const points = [];
 
@@ -1566,19 +1457,6 @@ ${this.healthState.action}`,
       });
       liveDetachers = Object.create(null);
 
-      Object.entries(vehicleLiveRefs).forEach(([vehicleId, ref]) => {
-        const entry = vehicleLiveCallbacks[vehicleId];
-        if (!ref || !entry) return;
-
-        try {
-          ref.off(entry.type || "value", entry.callback);
-        } catch (err) {
-          console.warn(err);
-        }
-      });
-
-      vehicleLiveRefs = Object.create(null);
-      vehicleLiveCallbacks = Object.create(null);
       this.stopPeriodicSync();
 
       if (firebaseInfoRef && firebaseInfoCallback) {

@@ -472,10 +472,6 @@ createApp({
       return this.visibleAllFilteredPoints.length ? this.visibleAllFilteredPoints[0] : null;
     },
 
-    totalDistanceKm() {
-      return Number(this.latestVisiblePoint?.cumulativeKm || 0);
-    },
-
     totalDistanceText() {
       return this.latestVisiblePoint && this.latestVisiblePoint.cumulativeKm != null
         ? `${this.latestVisiblePoint.cumulativeKm.toFixed(2)} km`

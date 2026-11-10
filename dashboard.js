@@ -188,31 +188,6 @@ function splitLabelLines(text, maxLineLength = 12) {
   return [first, second.slice(0, Math.max(1, maxLineLength - 1)) + '…'];
 }
 
-function polarToCartesian(cx, cy, radius, angleDeg) {
-  const angleRad = ((angleDeg - 90) * Math.PI) / 180;
-  return {
-    x: cx + radius * Math.cos(angleRad),
-    y: cy + radius * Math.sin(angleRad),
-  };
-}
-
-function describePieSlice(cx, cy, radius, startAngle, endAngle) {
-  const start = polarToCartesian(cx, cy, radius, endAngle);
-  const end = polarToCartesian(cx, cy, radius, startAngle);
-  const largeArcFlag = endAngle - startAngle <= 180 ? 0 : 1;
-  return [
-    `M ${cx} ${cy}`,
-    `L ${start.x} ${start.y}`,
-    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
-    'Z',
-  ].join(' ');
-}
-
-function pieLabelPoint(cx, cy, radius, angleDeg) {
-  const point = polarToCartesian(cx, cy, radius, angleDeg);
-  return { x: point.x, y: point.y };
-}
-
 function isSuspiciousJump(prev, curr, maxSpeedKmh = 180) {
   if (!prev || !curr || !prev.date || !curr.date) return null;
 
@@ -527,14 +502,6 @@ createApp({
       return formatDateTime(value);
     },
 
-    formatAxisDistance(value) {
-      return formatDistanceAxis(value);
-    },
-
-    splitLabelLines(text, maxLineLength = 12) {
-      return splitLabelLines(text, maxLineLength);
-    },
-
     // สร้างฟังก์ชันกรองครั้งเดียวต่อรอบ (ตรรกะเดิมของ matchesFilter)
     buildFilterMatcher() {
       if (this.filterMode === 'day') {
@@ -558,10 +525,6 @@ createApp({
       }
 
       return (date) => !!date;
-    },
-
-    matchesFilter(date) {
-      return this.buildFilterMatcher()(date);
     },
 
     // prefix ของ key ที่ใช้ query ตามช่วงที่เลือก (null = ค่าตัวกรองไม่ถูกต้อง)
